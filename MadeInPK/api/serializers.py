@@ -105,9 +105,17 @@ class CategorySerializer(serializers.ModelSerializer):
 
 # Product Serializers
 class ProductImageSerializer(serializers.ModelSerializer):
+    image_url = serializers.SerializerMethodField()
+    
     class Meta:
         model = ProductImage
-        fields = ['id', 'image_url', 'is_primary', 'order']
+        fields = ['id', 'image', 'image_url', 'is_primary', 'order']
+    
+    def get_image_url(self, obj):
+        request = self.context.get('request')
+        if obj.image and request:
+            return request.build_absolute_uri(obj.image.url)
+        return None
 
 
 class ProductSerializer(serializers.ModelSerializer):
@@ -133,7 +141,7 @@ class ProductSerializer(serializers.ModelSerializer):
 
 class ProductCreateSerializer(serializers.ModelSerializer):
     images = serializers.ListField(
-        child=serializers.URLField(), 
+        child=serializers.ImageField(), 
         write_only=True, 
         required=False
     )
@@ -147,10 +155,10 @@ class ProductCreateSerializer(serializers.ModelSerializer):
         product = Product.objects.create(**validated_data)
         
         # Create product images
-        for idx, image_url in enumerate(images_data):
+        for idx, image_file in enumerate(images_data):
             ProductImage.objects.create(
                 product=product,
-                image_url=image_url,
+                image=image_file,
                 is_primary=(idx == 0),
                 order=idx
             )

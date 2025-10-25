@@ -111,9 +111,9 @@ class Product(models.Model):
 
 
 class ProductImage(models.Model):
-    """Product images - normalized separately"""
+    """Product images - stored locally on server"""
     product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name='images')
-    image_url = models.URLField(max_length=500)
+    image = models.ImageField(upload_to='products/', max_length=500, null=True, blank=True)
     is_primary = models.BooleanField(default=False)
     order = models.IntegerField(default=0)
     

@@ -80,9 +80,13 @@ python manage.py collectstatic
 
 ### 6. Start Services
 
-**Terminal 1 - Django Server:**
+**Terminal 1 - Django ASGI Server (Daphne - for WebSockets):**
 ```bash
-python manage.py runserver
+# Use Daphne instead of runserver to handle WebSockets
+daphne -b 0.0.0.0 -p 8000 MadeInPK.asgi:application
+
+# OR for development with auto-reload:
+daphne -b 0.0.0.0 -p 8000 MadeInPK.asgi:application --reload
 ```
 
 **Terminal 2 - Celery Worker:**
@@ -98,6 +102,21 @@ celery -A MadeInPK beat --loglevel=info
 **Terminal 4 - Redis (if not running as service):**
 ```bash
 redis-server
+```
+
+## Important Notes
+
+### WebSocket Support
+⚠️ **DO NOT use `python manage.py runserver`** - it does not support WebSockets!
+
+Use **Daphne** (ASGI server) instead:
+```bash
+daphne MadeInPK.asgi:application
+```
+
+For production, use Daphne with proper workers:
+```bash
+daphne -u /tmp/daphne.sock MadeInPK.asgi:application
 ```
 
 ## API Endpoints

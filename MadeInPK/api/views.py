@@ -181,13 +181,21 @@ class ProductViewSet(viewsets.ModelViewSet):
             return Response({'error': 'You can only add images to your own products'},
                           status=status.HTTP_403_FORBIDDEN)
         
-        serializer = ProductImageSerializer(data=request.data)
-        if serializer.is_valid():
-            serializer.save(product=product)
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
-
+        image_file = request.FILES.get('image')
+        if not image_file:
+            return Response({'error': 'No image file provided'}, 
+                          status=status.HTTP_400_BAD_REQUEST)
+        
+        # Create product image
+        product_image = ProductImage.objects.create(
+            product=product,
+            image=image_file,
+            is_primary=not product.images.exists(),  # First image is primary
+            order=product.images.count()
+        )
+        
+        serializer = ProductImageSerializer(product_image, context={'request': request})
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
 # Auction ViewSet
 class AuctionListingViewSet(viewsets.ModelViewSet):
     """CRUD operations for auction listings"""
