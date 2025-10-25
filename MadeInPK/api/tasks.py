@@ -1,0 +1,328 @@
+from celery import shared_task
+from django.core.mail import send_mail
+from django.conf import settings
+from django.utils import timezone
+from datetime import timedelta
+
+
+@shared_task
+def check_auction_endings():
+    """Check for auctions that have ended and process winners"""
+    from .models import AuctionListing, Order, Notification
+    from decimal import Decimal
+    import uuid
+    
+    # Get auctions that have ended but not yet processed
+    now = timezone.now()
+    ended_auctions = AuctionListing.objects.filter(
+        status='active',
+        end_time__lte=now
+    ).select_related('product', 'product__seller')
+    
+    for auction in ended_auctions:
+        # Get the winning bid
+        winning_bid = auction.bids.filter(is_winning=True).first()
+        
+        if winning_bid:
+            # Update auction with winner
+            auction.winner = winning_bid.bidder
+            auction.status = 'ended'
+            auction.save()
+            
+            # Create order
+            total_amount = winning_bid.amount
+            platform_fee = total_amount * Decimal(str(settings.STRIPE_PLATFORM_FEE_PERCENTAGE))
+            seller_amount = total_amount - platform_fee
+            
+            order = Order.objects.create(
+                order_number=f"AUC-{uuid.uuid4().hex[:12].upper()}",
+                buyer=winning_bid.bidder,
+                seller=auction.product.seller,
+                product=auction.product,
+                order_type='auction',
+                auction=auction,
+                quantity=1,
+                unit_price=winning_bid.amount,
+                total_amount=total_amount,
+                platform_fee=platform_fee,
+                seller_amount=seller_amount,
+                shipping_address=winning_bid.bidder.addresses.filter(is_default=True).first(),
+                status='pending_payment',
+                payment_deadline=now + timedelta(hours=settings.PAYMENT_DEADLINE_HOURS)
+            )
+            
+            # Create notification for winner
+            notification = Notification.objects.create(
+                user=winning_bid.bidder,
+                notification_type='auction_won',
+                title='Congratulations! You won the auction',
+                message=f'You won the auction for {auction.product.name}. Please complete payment within 24 hours.',
+                auction=auction,
+                order=order
+            )
+            
+            # Send email notification
+            send_auction_won_email.delay(order.id)
+            
+            # Notify seller
+            Notification.objects.create(
+                user=auction.product.seller,
+                notification_type='auction_ended',
+                title='Your auction has ended',
+                message=f'Your auction for {auction.product.name} has ended. Winner: {winning_bid.bidder.username}',
+                auction=auction,
+                order=order
+            )
+        else:
+            # No bids, mark as ended
+            auction.status = 'ended'
+            auction.save()
+            
+            # Notify seller
+            Notification.objects.create(
+                user=auction.product.seller,
+                notification_type='auction_ended',
+                title='Your auction has ended',
+                message=f'Your auction for {auction.product.name} has ended with no bids.',
+                auction=auction
+            )
+
+
+@shared_task
+def check_payment_deadlines():
+    """Check for orders with expired payment deadlines"""
+    from .models import Order, PaymentViolation, User
+    
+    now = timezone.now()
+    expired_orders = Order.objects.filter(
+        status='pending_payment',
+        payment_deadline__lte=now
+    ).select_related('buyer', 'auction')
+    
+    for order in expired_orders:
+        # Mark order as payment failed
+        order.status = 'payment_failed'
+        order.save()
+        
+        # Create payment violation record
+        PaymentViolation.objects.create(
+            user=order.buyer,
+            auction=order.auction,
+            order=order,
+            payment_deadline=order.payment_deadline,
+            notes='Payment deadline expired'
+        )
+        
+        # Increment failed payment count
+        buyer = order.buyer
+        buyer.failed_payment_count += 1
+        
+        # Block user if they exceeded the limit
+        if buyer.failed_payment_count >= settings.MAX_FAILED_PAYMENTS_BEFORE_BLOCK:
+            buyer.is_blocked = True
+            
+            # Notify user about blocking
+            from .models import Notification
+            Notification.objects.create(
+                user=buyer,
+                notification_type='account_blocked',
+                title='Account Blocked',
+                message=f'Your account has been blocked due to {buyer.failed_payment_count} failed payments.',
+            )
+            
+            send_account_blocked_email.delay(buyer.id)
+        
+        buyer.save()
+
+
+@shared_task
+def send_pending_notifications():
+    """Send email notifications that haven't been sent yet"""
+    from .models import Notification
+    
+    pending_notifications = Notification.objects.filter(
+        is_sent_via_email=False
+    ).select_related('user')[:50]  # Process 50 at a time
+    
+    for notification in pending_notifications:
+        try:
+            send_mail(
+                subject=notification.title,
+                message=notification.message,
+                from_email=settings.DEFAULT_FROM_EMAIL,
+                recipient_list=[notification.user.email],
+                fail_silently=False,
+            )
+            
+            notification.is_sent_via_email = True
+            notification.email_sent_at = timezone.now()
+            notification.save()
+        except Exception as e:
+            print(f"Failed to send email to {notification.user.email}: {str(e)}")
+
+
+@shared_task
+def send_auction_won_email(order_id):
+    """Send email to auction winner with payment link"""
+    from .models import Order
+    
+    try:
+        order = Order.objects.select_related('buyer', 'product', 'auction').get(id=order_id)
+        
+        subject = f'You won the auction for {order.product.name}'
+        message = f"""
+Congratulations {order.buyer.username}!
+
+You won the auction for: {order.product.name}
+Winning bid: Rs. {order.total_amount}
+
+Please complete your payment within 24 hours using the link below:
+{order.payment_url}
+
+Order Number: {order.order_number}
+Payment Deadline: {order.payment_deadline.strftime('%Y-%m-%d %H:%M:%S')}
+
+Thank you for using MadeInPK!
+        """
+        
+        send_mail(
+            subject=subject,
+            message=message,
+            from_email=settings.DEFAULT_FROM_EMAIL,
+            recipient_list=[order.buyer.email],
+            fail_silently=False,
+        )
+    except Order.DoesNotExist:
+        print(f"Order {order_id} not found")
+
+
+@shared_task
+def send_account_blocked_email(user_id):
+    """Send email notification when user is blocked"""
+    from .models import User
+    
+    try:
+        user = User.objects.get(id=user_id)
+        
+        subject = 'MadeInPK Account Blocked'
+        message = f"""
+Dear {user.username},
+
+Your MadeInPK account has been blocked due to multiple failed payments.
+
+You have failed to complete payment for {user.failed_payment_count} auction(s) you won.
+
+If you believe this is a mistake, please contact our support team.
+
+Thank you,
+MadeInPK Team
+        """
+        
+        send_mail(
+            subject=subject,
+            message=message,
+            from_email=settings.DEFAULT_FROM_EMAIL,
+            recipient_list=[user.email],
+            fail_silently=False,
+        )
+    except User.DoesNotExist:
+        print(f"User {user_id} not found")
+
+
+@shared_task
+def send_payment_success_email(order_id):
+    """Send email notifications after successful payment"""
+    from .models import Order
+    
+    try:
+        order = Order.objects.select_related('buyer', 'seller', 'product').get(id=order_id)
+        
+        # Email to buyer
+        buyer_subject = f'Payment Successful - Order {order.order_number}'
+        buyer_message = f"""
+Dear {order.buyer.username},
+
+Your payment has been successfully processed!
+
+Order Details:
+- Order Number: {order.order_number}
+- Product: {order.product.name}
+- Amount: Rs. {order.total_amount}
+
+The seller will ship your item soon. You can track your order in your dashboard.
+
+Thank you for using MadeInPK!
+        """
+        
+        send_mail(
+            subject=buyer_subject,
+            message=buyer_message,
+            from_email=settings.DEFAULT_FROM_EMAIL,
+            recipient_list=[order.buyer.email],
+            fail_silently=False,
+        )
+        
+        # Email to seller
+        seller_subject = f'New Sale - Order {order.order_number}'
+        seller_message = f"""
+Dear {order.seller.username},
+
+Great news! You have a new sale.
+
+Order Details:
+- Order Number: {order.order_number}
+- Product: {order.product.name}
+- Amount: Rs. {order.seller_amount} (after platform fee)
+- Buyer: {order.buyer.username}
+
+Please ship the item and mark it as shipped in your dashboard.
+
+Shipping Address:
+{order.shipping_address.street_address}
+{order.shipping_address.city}
+{order.shipping_address.postal_code}
+
+Thank you for selling on MadeInPK!
+        """
+        
+        send_mail(
+            subject=seller_subject,
+            message=seller_message,
+            from_email=settings.DEFAULT_FROM_EMAIL,
+            recipient_list=[order.seller.email],
+            fail_silently=False,
+        )
+    except Order.DoesNotExist:
+        print(f"Order {order_id} not found")
+
+
+@shared_task
+def send_feedback_request_email(order_id):
+    """Send feedback request after order is delivered"""
+    from .models import Order
+    
+    try:
+        order = Order.objects.select_related('buyer', 'seller', 'product').get(id=order_id)
+        
+        subject = f'Please provide feedback - Order {order.order_number}'
+        message = f"""
+Dear {order.buyer.username},
+
+We hope you received your order for {order.product.name} in good condition.
+
+We would love to hear about your experience with the seller and our platform.
+
+Please take a moment to provide your feedback in your dashboard.
+
+Thank you for using MadeInPK!
+        """
+        
+        send_mail(
+            subject=subject,
+            message=message,
+            from_email=settings.DEFAULT_FROM_EMAIL,
+            recipient_list=[order.buyer.email],
+            fail_silently=False,
+        )
+    except Order.DoesNotExist:
+        print(f"Order {order_id} not found")
