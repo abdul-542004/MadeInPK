@@ -30,3 +30,10 @@ I want you to write django models (normalized upto BCNF) for this app. Note that
 -> WE DO NOT SHIP PRODUCTS BUT JUST CONNECT BUYER AND SELLER, Seller has to ship the product himself and mark the order as shipped on his dashboard.
 
 -> There should be a minimal complain system so the people can complain what they feel was wrong in the platform.
+
+
+---
+There is no Seller model and hence no seller info like seller brand name, address, biography, average rating.
+No Rating and reviews for fixed price products.(auction products shouldnt have reviews and ratings)
+
+There should also be an admin model which would allow admins  to oversee the entire platform. (See Orders, Payments, verify sellers, ban buyers/sellers, see if the products are ethical or not, etc)

@@ -3,7 +3,7 @@ from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
 from .models import (
     User, Province, City, Address, Category, Product, ProductImage,
     AuctionListing, Bid, FixedPriceListing, Order, Payment,
-    Feedback, Conversation, Message, Notification, Complaint, PaymentViolation
+    Feedback, Conversation, Message, Notification, Complaint, PaymentViolation, SellerProfile, Wishlist, ProductReview
 )
 
 
@@ -152,4 +152,28 @@ class PaymentViolationAdmin(admin.ModelAdmin):
     list_filter = ['violation_date']
     search_fields = ['user__username', 'order__order_number']
     readonly_fields = ['violation_date']
+
+
+@admin.register(SellerProfile)
+class SellerProfileAdmin(admin.ModelAdmin):
+    list_display = ['id', 'user', 'brand_name', 'is_verified', 'average_rating', 'total_feedbacks']
+    list_filter = ['is_verified', 'created_at']
+    search_fields = ['user__username', 'brand_name', 'business_address']
+    readonly_fields = ['average_rating', 'total_feedbacks', 'created_at', 'updated_at']
+
+
+@admin.register(Wishlist)
+class WishlistAdmin(admin.ModelAdmin):
+    list_display = ['id', 'user', 'product', 'created_at']
+    list_filter = ['created_at']
+    search_fields = ['user__username', 'product__name']
+    readonly_fields = ['created_at']
+
+
+@admin.register(ProductReview)
+class ProductReviewAdmin(admin.ModelAdmin):
+    list_display = ['id', 'product', 'buyer', 'rating', 'is_verified_purchase', 'created_at']
+    list_filter = ['rating', 'is_verified_purchase', 'created_at']
+    search_fields = ['product__name', 'buyer__username', 'title', 'comment']
+    readonly_fields = ['created_at', 'updated_at']
 

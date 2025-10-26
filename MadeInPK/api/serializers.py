@@ -3,7 +3,7 @@ from django.contrib.auth import get_user_model
 from .models import (
     Province, City, Address, Category, Product, ProductImage,
     AuctionListing, Bid, FixedPriceListing, Order, Payment,
-    Feedback, Conversation, Message, Notification, Complaint, Wishlist
+    Feedback, Conversation, Message, Notification, Complaint, Wishlist, SellerProfile, ProductReview
 )
 
 User = get_user_model()
@@ -43,12 +43,13 @@ class UserProfileSerializer(serializers.ModelSerializer):
     total_sales = serializers.SerializerMethodField()
     total_purchases = serializers.SerializerMethodField()
     average_seller_rating = serializers.SerializerMethodField()
+    seller_profile = serializers.SerializerMethodField()
     
     class Meta:
         model = User
         fields = ['id', 'username', 'email', 'first_name', 'last_name', 
                   'phone_number', 'role', 'created_at', 'total_sales', 
-                  'total_purchases', 'average_seller_rating']
+                  'total_purchases', 'average_seller_rating', 'seller_profile']
     
     def get_total_sales(self, obj):
         return obj.sales.filter(status='delivered').count()
@@ -61,6 +62,24 @@ class UserProfileSerializer(serializers.ModelSerializer):
         if feedbacks.exists():
             return sum(f.seller_rating for f in feedbacks) / feedbacks.count()
         return None
+    
+    def get_seller_profile(self, obj):
+        if hasattr(obj, 'seller_profile'):
+            return SellerProfileSerializer(obj.seller_profile).data
+        return None
+
+
+# Seller Profile Serializer
+class SellerProfileSerializer(serializers.ModelSerializer):
+    user_username = serializers.CharField(source='user.username', read_only=True)
+    user_email = serializers.CharField(source='user.email', read_only=True)
+    
+    class Meta:
+        model = SellerProfile
+        fields = ['id', 'user', 'user_username', 'user_email', 'brand_name', 
+                  'biography', 'business_address', 'website', 'social_media_links',
+                  'is_verified', 'average_rating', 'total_feedbacks', 'created_at', 'updated_at']
+        read_only_fields = ['user', 'average_rating', 'total_feedbacks', 'created_at', 'updated_at']
 
 
 # Address Serializers
@@ -123,11 +142,15 @@ class ProductSerializer(serializers.ModelSerializer):
     category_name = serializers.CharField(source='category.name', read_only=True)
     images = ProductImageSerializer(many=True, read_only=True)
     listing_type = serializers.SerializerMethodField()
+    average_rating = serializers.SerializerMethodField()
+    total_reviews = serializers.SerializerMethodField()
+    seller_profile = serializers.SerializerMethodField()
     
     class Meta:
         model = Product
         fields = ['id', 'seller', 'seller_username', 'category', 'category_name',
                   'name', 'description', 'condition', 'images', 'listing_type',
+                  'average_rating', 'total_reviews', 'seller_profile',
                   'created_at', 'updated_at']
         read_only_fields = ['seller', 'created_at', 'updated_at']
     
@@ -136,6 +159,31 @@ class ProductSerializer(serializers.ModelSerializer):
             return 'auction'
         elif hasattr(obj, 'fixed_price'):
             return 'fixed_price'
+        return None
+    
+    def get_average_rating(self, obj):
+        """Only for fixed-price products"""
+        if hasattr(obj, 'fixed_price'):
+            reviews = obj.reviews.all()
+            if reviews.exists():
+                return round(sum(r.rating for r in reviews) / reviews.count(), 2)
+        return None
+    
+    def get_total_reviews(self, obj):
+        """Only for fixed-price products"""
+        if hasattr(obj, 'fixed_price'):
+            return obj.reviews.count()
+        return 0
+    
+    def get_seller_profile(self, obj):
+        """Include seller profile info"""
+        if hasattr(obj.seller, 'seller_profile'):
+            return {
+                'brand_name': obj.seller.seller_profile.brand_name,
+                'biography': obj.seller.seller_profile.biography,
+                'is_verified': obj.seller.seller_profile.is_verified,
+                'average_rating': str(obj.seller.seller_profile.average_rating)
+            }
         return None
 
 
@@ -555,3 +603,57 @@ class WishlistCreateSerializer(serializers.ModelSerializer):
     def create(self, validated_data):
         validated_data['user'] = self.context['request'].user
         return super().create(validated_data)
+
+
+# Product Review Serializers
+class ProductReviewSerializer(serializers.ModelSerializer):
+    buyer_username = serializers.CharField(source='buyer.username', read_only=True)
+    product_name = serializers.CharField(source='product.name', read_only=True)
+    
+    class Meta:
+        model = ProductReview
+        fields = ['id', 'product', 'product_name', 'buyer', 'buyer_username', 
+                  'order', 'rating', 'title', 'comment', 'is_verified_purchase',
+                  'created_at', 'updated_at']
+        read_only_fields = ['buyer', 'is_verified_purchase', 'created_at', 'updated_at']
+
+
+class ProductReviewCreateSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ProductReview
+        fields = ['product', 'rating', 'title', 'comment', 'order']
+    
+    def validate_product(self, value):
+        # Ensure product is a fixed-price listing
+        if hasattr(value, 'auction'):
+            raise serializers.ValidationError("Auction products cannot be reviewed")
+        if not hasattr(value, 'fixed_price'):
+            raise serializers.ValidationError("Product must have a fixed-price listing")
+        return value
+    
+    def validate(self, data):
+        user = self.context['request'].user
+        product = data['product']
+        
+        # Check if user already reviewed this product
+        if ProductReview.objects.filter(product=product, buyer=user).exists():
+            raise serializers.ValidationError("You have already reviewed this product")
+        
+        return data
+    
+    def create(self, validated_data):
+        user = self.context['request'].user
+        order = validated_data.get('order')
+        
+        # Check if verified purchase
+        is_verified = False
+        if order and order.buyer == user and order.product == validated_data['product']:
+            is_verified = True
+        
+        review = ProductReview.objects.create(
+            buyer=user,
+            is_verified_purchase=is_verified,
+            **validated_data
+        )
+        return review
+

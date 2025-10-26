@@ -12,6 +12,7 @@ class User(AbstractUser):
         ('buyer', 'Buyer'),
         ('seller', 'Seller'),
         ('both', 'Both'),
+        ('admin', 'Admin'),
     ]
     
     phone_number = models.CharField(max_length=15, blank=True)
@@ -28,6 +29,40 @@ class User(AbstractUser):
     
     def __str__(self):
         return self.username
+
+
+# Seller Profile Model
+class SellerProfile(models.Model):
+    """Extended profile for sellers with business information"""
+    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='seller_profile')
+    brand_name = models.CharField(max_length=255, blank=True)
+    biography = models.TextField(blank=True)
+    business_address = models.TextField(blank=True)  # Full business address
+    website = models.URLField(blank=True)
+    social_media_links = models.JSONField(default=dict, blank=True)  # {'facebook': 'url', 'instagram': 'url'}
+    is_verified = models.BooleanField(default=False)  # Admin verification
+    average_rating = models.DecimalField(max_digits=3, decimal_places=2, default=0.00, validators=[MinValueValidator(0), MaxValueValidator(5)])
+    total_feedbacks = models.IntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        db_table = 'seller_profiles'
+    
+    def __str__(self):
+        return f"Seller Profile: {self.user.username} - {self.brand_name or 'No Brand'}"
+    
+    def update_rating(self):
+        """Update average rating from feedbacks"""
+        feedbacks = Feedback.objects.filter(seller=self.user)
+        if feedbacks.exists():
+            avg_rating = feedbacks.aggregate(models.Avg('seller_rating'))['seller_rating__avg']
+            self.average_rating = round(avg_rating, 2)
+            self.total_feedbacks = feedbacks.count()
+        else:
+            self.average_rating = 0.00
+            self.total_feedbacks = 0
+        self.save()
 
 
 # Address Models (Normalized)
@@ -319,6 +354,12 @@ class Feedback(models.Model):
     
     def __str__(self):
         return f"Feedback by {self.buyer.username} for Order {self.order.order_number}"
+    
+    def save(self, *args, **kwargs):
+        super().save(*args, **kwargs)
+        # Update seller's average rating
+        if hasattr(self.seller, 'seller_profile'):
+            self.seller.seller_profile.update_rating()
 
 
 # Message Model (for buyer-seller communication)
@@ -471,6 +512,35 @@ class Wishlist(models.Model):
     
     def __str__(self):
         return f"Wishlist: {self.user.username} - {self.product.name}"
+
+
+# Product Review Model (for fixed-price products only)
+class ProductReview(models.Model):
+    """Reviews for fixed-price products (not for auctions)"""
+    product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name='reviews')
+    buyer = models.ForeignKey(User, on_delete=models.CASCADE, related_name='product_reviews')
+    order = models.ForeignKey(Order, on_delete=models.CASCADE, related_name='product_review', null=True, blank=True)
+    rating = models.IntegerField(validators=[MinValueValidator(1), MaxValueValidator(5)])
+    title = models.CharField(max_length=200)
+    comment = models.TextField()
+    is_verified_purchase = models.BooleanField(default=False)  # True if linked to an order
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        db_table = 'product_reviews'
+        ordering = ['-created_at']
+        # One review per user per product
+        unique_together = ['product', 'buyer']
+    
+    def __str__(self):
+        return f"Review by {self.buyer.username} for {self.product.name}: {self.rating}/5"
+    
+    def save(self, *args, **kwargs):
+        # Ensure only fixed-price products can be reviewed
+        if hasattr(self.product, 'auction'):
+            raise ValueError("Auction products cannot be reviewed")
+        super().save(*args, **kwargs)
 
 
 # add wishlist model

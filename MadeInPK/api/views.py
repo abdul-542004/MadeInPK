@@ -1,4 +1,4 @@
-from rest_framework import viewsets, status, filters
+from rest_framework import viewsets, status, filters, serializers
 from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated, AllowAny, IsAuthenticatedOrReadOnly
@@ -13,7 +13,7 @@ import uuid
 from .models import (
     Province, City, Address, Category, Product, ProductImage,
     AuctionListing, Bid, FixedPriceListing, Order, Payment,
-    Feedback, Conversation, Message, Notification, Complaint, Wishlist
+    Feedback, Conversation, Message, Notification, Complaint, Wishlist, SellerProfile, ProductReview
 )
 from .serializers import (
     UserRegistrationSerializer, UserSerializer, UserProfileSerializer,
@@ -24,7 +24,8 @@ from .serializers import (
     FixedPriceCreateSerializer, OrderSerializer, OrderCreateSerializer,
     PaymentSerializer, FeedbackSerializer, FeedbackCreateSerializer,
     MessageSerializer, ConversationSerializer, NotificationSerializer,
-    ComplaintSerializer, ComplaintCreateSerializer, WishlistSerializer, WishlistCreateSerializer
+    ComplaintSerializer, ComplaintCreateSerializer, WishlistSerializer, WishlistCreateSerializer, 
+    SellerProfileSerializer, ProductReviewSerializer, ProductReviewCreateSerializer
 )
 
 User = get_user_model()
@@ -706,3 +707,99 @@ class WishlistViewSet(viewsets.ModelViewSet):
         wishlist_item = self.get_object()
         wishlist_item.delete()
         return Response({'message': 'Product removed from wishlist'})
+
+
+# Seller Profile ViewSet
+class SellerProfileViewSet(viewsets.ModelViewSet):
+    """CRUD operations for seller profiles"""
+    serializer_class = SellerProfileSerializer
+    permission_classes = [IsAuthenticated]
+    
+    def get_queryset(self):
+        # Admins can see all profiles, sellers can see their own
+        if self.request.user.role == 'admin':
+            return SellerProfile.objects.select_related('user').all()
+        return SellerProfile.objects.filter(user=self.request.user).select_related('user')
+    
+    def perform_create(self, serializer):
+        # Only allow creating profile for own user, and only if seller role
+        if self.request.user.role not in ['seller', 'both']:
+            raise serializers.ValidationError("Only sellers can create seller profiles")
+        if hasattr(self.request.user, 'seller_profile'):
+            raise serializers.ValidationError("Seller profile already exists")
+        serializer.save(user=self.request.user)
+    
+    @action(detail=True, methods=['post'], permission_classes=[IsAuthenticated])
+    def verify(self, request, pk=None):
+        """Admin action to verify seller"""
+        if request.user.role != 'admin':
+            return Response({'error': 'Only admins can verify sellers'}, 
+                          status=status.HTTP_403_FORBIDDEN)
+        
+        profile = self.get_object()
+        profile.is_verified = True
+        profile.save()
+        return Response({'message': 'Seller verified successfully'})
+    
+    @action(detail=True, methods=['post'], permission_classes=[IsAuthenticated])
+    def unverify(self, request, pk=None):
+        """Admin action to unverify seller"""
+        if request.user.role != 'admin':
+            return Response({'error': 'Only admins can unverify sellers'}, 
+                          status=status.HTTP_403_FORBIDDEN)
+        
+        profile = self.get_object()
+        profile.is_verified = False
+        profile.save()
+        return Response({'message': 'Seller unverified'})
+
+
+# Product Review ViewSet
+class ProductReviewViewSet(viewsets.ModelViewSet):
+    """CRUD operations for product reviews (fixed-price products only)"""
+    serializer_class = ProductReviewSerializer
+    permission_classes = [IsAuthenticatedOrReadOnly]
+    filter_backends = [filters.OrderingFilter]
+    ordering_fields = ['created_at', 'rating']
+    ordering = ['-created_at']
+    
+    def get_queryset(self):
+        queryset = ProductReview.objects.select_related('product', 'buyer', 'order').all()
+        
+        # Filter by product
+        product_id = self.request.query_params.get('product')
+        if product_id:
+            queryset = queryset.filter(product_id=product_id)
+        
+        # Filter by rating
+        rating = self.request.query_params.get('rating')
+        if rating:
+            queryset = queryset.filter(rating=rating)
+        
+        # Filter verified purchases only
+        verified_only = self.request.query_params.get('verified_only')
+        if verified_only == 'true':
+            queryset = queryset.filter(is_verified_purchase=True)
+        
+        return queryset
+    
+    def get_serializer_class(self):
+        if self.action == 'create':
+            return ProductReviewCreateSerializer
+        return ProductReviewSerializer
+    
+    def perform_create(self, serializer):
+        serializer.save(buyer=self.request.user)
+    
+    def perform_update(self, serializer):
+        # Only allow updating own reviews
+        review = self.get_object()
+        if review.buyer != self.request.user:
+            raise serializers.ValidationError("You can only update your own reviews")
+        serializer.save()
+    
+    def perform_destroy(self, instance):
+        # Only allow deleting own reviews
+        if instance.buyer != self.request.user:
+            raise serializers.ValidationError("You can only delete your own reviews")
+        instance.delete()

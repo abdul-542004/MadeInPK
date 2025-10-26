@@ -18,6 +18,8 @@ router.register(r'conversations', views.ConversationViewSet, basename='conversat
 router.register(r'notifications', views.NotificationViewSet, basename='notification')
 router.register(r'complaints', views.ComplaintViewSet, basename='complaint')
 router.register(r'wishlist', views.WishlistViewSet, basename='wishlist')
+router.register(r'seller-profiles', views.SellerProfileViewSet, basename='seller-profile')
+router.register(r'product-reviews', views.ProductReviewViewSet, basename='product-review')
 
 urlpatterns = [
     # Authentication endpoints

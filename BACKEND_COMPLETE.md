@@ -4,8 +4,9 @@
 
 Your complete Django + DRF backend for MadeInPK e-commerce platform is now **READY**!
 
-### 📦 Models (15 Models - Normalized to BCNF)
-✅ **User Management**: Custom User with roles, blocking, Stripe integration  
+### 📦 Models (16 Models - Normalized to BCNF)
+✅ **User Management**: Custom User with roles (buyer/seller/both/admin), blocking, Stripe integration  
+✅ **Seller Profiles**: Brand name, biography, business address, verification status, average rating  
 ✅ **Location**: Province → City → Address (normalized)  
 ✅ **Products**: Product, ProductImage, Category (with hierarchy)  
 ✅ **Listings**: AuctionListing (unique items) & FixedPriceListing (bulk)  
@@ -17,9 +18,11 @@ Your complete Django + DRF backend for MadeInPK e-commerce platform is now **REA
 ✅ **Notifications**: Email notification system (Celery-ready)  
 ✅ **Complaints**: Complaint tracking system  
 ✅ **Violations**: PaymentViolation tracker for non-paying users  
+✅ **Wishlist**: User wishlists for products  
 
-### 🔌 API Endpoints (50+ Endpoints)
+### 🔌 API Endpoints (55+ Endpoints)
 ✅ **Auth**: Register, Login, Logout, Profile  
+✅ **Seller Profiles**: CRUD + verification (admin)  
 ✅ **Products**: Full CRUD + image management  
 ✅ **Auctions**: Create, list, bid, view bids  
 ✅ **Fixed Price**: Create, list, purchase  
@@ -30,7 +33,7 @@ Your complete Django + DRF backend for MadeInPK e-commerce platform is now **REA
 ✅ **Complaints**: Create, view, track  
 ✅ **Location**: Provinces, cities, addresses  
 
-### 🚀 Serializers (20+ Serializers)
+### 🚀 Serializers (25+ Serializers)
 ✅ Complete validation logic  
 ✅ Nested serializers for related data  
 ✅ Read-only & write-only fields properly configured  
@@ -141,10 +144,13 @@ redis-server
 - Payment deadline tracking (24 hours)
 - Non-paying users blocked after 3 violations
 - Real-time bidding prevents stale data
+- Seller profiles with brand info, verification, ratings
+- Admin oversight for platform management
 
 ### ✅ Security
 - Token authentication
-- Role-based permissions
+- Role-based permissions (buyer/seller/both/admin)
+- Custom permission checks
 - CSRF protection
 - CORS configured for React
 - Blocked user validation
@@ -155,6 +161,7 @@ redis-server
 - Product images in separate table
 - Categories with parent-child hierarchy
 - Separate tables for auction vs fixed-price
+- Seller profiles linked to users
 - No redundant data
 
 ### ✅ Real-time Features
@@ -281,11 +288,11 @@ E-Commerce Project/
     │   └── celery.py             # ✅ Celery config
     └── api/
         ├── __init__.py
-        ├── models.py             # ✅ 15 models (BCNF)
-        ├── serializers.py        # ✅ 20+ serializers
-        ├── views.py              # ✅ All ViewSets
+        ├── models.py             # ✅ 16 models (BCNF)
+        ├── serializers.py        # ✅ 25+ serializers
+        ├── views.py              # ✅ All ViewSets + seller profiles
         ├── urls.py               # ✅ All routes
-        ├── admin.py              # ✅ Admin registered
+        ├── admin.py              # ✅ Admin registered + seller profiles
         ├── tasks.py              # ✅ Celery tasks
         ├── consumers.py          # ✅ WebSocket consumer
         ├── routing.py            # ✅ WS routes
@@ -314,9 +321,10 @@ E-Commerce Project/
 - [x] Non-paying user tracking & blocking
 - [x] Complaint system
 - [x] Address normalization
-- [x] Custom User model
+- [x] Custom User model with admin role
+- [x] Seller profiles with brand info & verification
 - [x] Authentication & permissions
-- [x] Admin panel
+- [x] Admin panel for platform oversight
 
 ---
 

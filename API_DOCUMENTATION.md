@@ -61,7 +61,55 @@ GET /api/auth/profile/
 
 ---
 
-## 📍 Location Endpoints
+## � Seller Profile Endpoints
+
+### List Seller Profiles
+```http
+GET /api/seller-profiles/
+```
+**Auth Required:** Yes (Admins see all, sellers see own)
+
+### Create Seller Profile
+```http
+POST /api/seller-profiles/
+```
+**Auth Required:** Yes (Sellers only)
+
+**Body:**
+```json
+{
+  "brand_name": "Artisan Crafts",
+  "biography": "Handmade crafts from Pakistan...",
+  "business_address": "123 Artisan Street, Lahore",
+  "website": "https://artisan-crafts.pk",
+  "social_media_links": {
+    "facebook": "https://facebook.com/artisan",
+    "instagram": "https://instagram.com/artisan"
+  }
+}
+```
+
+### Update Seller Profile
+```http
+PUT /api/seller-profiles/{id}/
+```
+**Auth Required:** Yes
+
+### Verify Seller (Admin)
+```http
+POST /api/seller-profiles/{id}/verify/
+```
+**Auth Required:** Yes (Admin only)
+
+### Unverify Seller (Admin)
+```http
+POST /api/seller-profiles/{id}/unverify/
+```
+**Auth Required:** Yes (Admin only)
+
+---
+
+## �📍 Location Endpoints
 
 ### List Provinces
 ```http
@@ -132,6 +180,42 @@ POST /api/products/
 GET /api/products/{id}/
 PUT /api/products/{id}/
 DELETE /api/products/{id}/
+```
+
+**Response includes for Fixed-Price Products:**
+```json
+{
+  "id": 3,
+  "name": "Handmade Carpet",
+  "description": "Beautiful traditional carpet...",
+  "price": "2500.00",
+  "seller_username": "artisan_seller",
+  "average_rating": 4.5,
+  "total_reviews": 23,
+  "seller_profile": {
+    "brand_name": "Artisan Crafts",
+    "biography": "Creating handmade products since 1990...",
+    "is_verified": true,
+    "average_rating": "4.75"
+  },
+  "images": [...],
+  "listing_type": "fixed_price"
+}
+```
+
+**Response for Auction Products (No reviews):**
+```json
+{
+  "id": 5,
+  "name": "Rare Antique Vase",
+  "description": "Unique antique piece...",
+  "seller_username": "antique_dealer",
+  "average_rating": null,
+  "total_reviews": 0,
+  "seller_profile": null,
+  "images": [...],
+  "listing_type": "auction"
+}
 ```
 
 ### Add Product Image
@@ -392,6 +476,92 @@ GET /api/complaints/{id}/
 
 ---
 
+## ⭐ Product Review Endpoints (Fixed-Price Products Only)
+
+### List Reviews
+```http
+GET /api/product-reviews/
+GET /api/product-reviews/?product=1
+GET /api/product-reviews/?rating=5
+GET /api/product-reviews/?verified_only=true
+```
+**Auth Required:** No (Read-only is public)
+
+**Query Parameters:**
+- `product` - Filter by product ID
+- `rating` - Filter by rating (1-5)
+- `verified_only` - If `true`, only show verified purchases
+- `ordering` - Sort by `created_at`, `rating`, `-created_at`, `-rating`
+
+### Create Review
+```http
+POST /api/product-reviews/
+```
+**Auth Required:** Yes
+
+**Body:**
+```json
+{
+  "product": 3,
+  "rating": 5,
+  "title": "Excellent quality!",
+  "comment": "This product exceeded my expectations. Highly recommended!",
+  "order": 12
+}
+```
+
+**Notes:**
+- Only fixed-price products can be reviewed (auction products are rejected)
+- One review per user per product
+- If `order` is provided and matches buyer's order, review is marked as verified purchase
+- Users can only review products, not auction items
+
+### Update Review
+```http
+PUT /api/product-reviews/{id}/
+```
+**Auth Required:** Yes (Own reviews only)
+
+**Body:**
+```json
+{
+  "rating": 4,
+  "title": "Updated review title",
+  "comment": "Updated review content..."
+}
+```
+
+### Delete Review
+```http
+DELETE /api/product-reviews/{id}/
+```
+**Auth Required:** Yes (Own reviews only)
+
+### Review Detail
+```http
+GET /api/product-reviews/{id}/
+```
+
+**Response Example:**
+```json
+{
+  "id": 1,
+  "product": 3,
+  "product_name": "Handmade Carpet",
+  "buyer": 5,
+  "buyer_username": "john_doe",
+  "order": 12,
+  "rating": 5,
+  "title": "Excellent quality!",
+  "comment": "This product exceeded my expectations...",
+  "is_verified_purchase": true,
+  "created_at": "2025-10-20T14:30:00Z",
+  "updated_at": "2025-10-20T14:30:00Z"
+}
+```
+
+---
+
 ## 🔌 WebSocket Endpoints
 
 ### Auction Real-time Bidding
@@ -454,11 +624,48 @@ Most list endpoints support filtering by:
 
 ## 🔒 Permissions
 
-- **Public**: Categories, Provinces, Cities, Product listings (read)
-- **Authenticated**: Create products, place bids, purchase, messages
+- **Public**: Categories, Provinces, Cities, Product listings (read), Product reviews (read)
+- **Authenticated**: Create products, place bids, purchase, messages, write reviews
 - **Seller Only**: Create auctions/listings, mark shipped
-- **Buyer Only**: Mark delivered, create feedback
-- **Admin**: Access to admin panel at `/admin/`
+- **Buyer Only**: Mark delivered, create feedback, write product reviews
+- **Admin**: Access to admin panel at `/admin/`, verify sellers
+
+---
+
+## 📝 Important Notes
+
+### Product Reviews vs Seller Feedback
+
+**Product Reviews** (Fixed-Price Products Only):
+- Pre-purchase reviews visible to all buyers
+- Help buyers make informed decisions
+- Include rating (1-5 stars), title, and comment
+- Can be written by anyone who purchased the product
+- Displayed on product detail page
+- One review per user per product
+
+**Seller Feedback** (All Orders - Auction & Fixed-Price):
+- Post-purchase feedback given after delivery
+- Evaluates seller performance and platform experience
+- Only visible in aggregate (seller statistics)
+- Includes seller rating, platform rating, communication, shipping speed
+- One feedback per order
+- Used to calculate seller's average rating
+
+### Auction vs Fixed-Price Products
+
+**Auction Products:**
+- No product reviews
+- Basic product information only
+- Focus on bidding and auction details
+- Unique items (quantity = 1)
+
+**Fixed-Price Products:**
+- Full review system enabled
+- Average rating and review count displayed
+- Seller profile information shown
+- Can have bulk quantity
+- Helps buyers make informed purchase decisions
 
 ---
 
@@ -554,6 +761,39 @@ const placeBid = async (auctionId, amount) => {
       'Content-Type': 'application/json'
     },
     body: JSON.stringify({ amount })
+  });
+  return await response.json();
+};
+
+// Get product with reviews (for fixed-price)
+const getProductDetails = async (productId) => {
+  const response = await fetch(`${API_URL}/products/${productId}/`);
+  const product = await response.json();
+  
+  // If fixed-price product, fetch reviews
+  if (product.listing_type === 'fixed_price') {
+    const reviewsResponse = await fetch(`${API_URL}/product-reviews/?product=${productId}`);
+    product.reviews = await reviewsResponse.json();
+  }
+  
+  return product;
+};
+
+// Submit product review
+const submitReview = async (productId, rating, title, comment, orderId = null) => {
+  const response = await fetch(`${API_URL}/product-reviews/`, {
+    method: 'POST',
+    headers: {
+      'Authorization': `Token ${token}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      product: productId,
+      rating,
+      title,
+      comment,
+      order: orderId
+    })
   });
   return await response.json();
 };
