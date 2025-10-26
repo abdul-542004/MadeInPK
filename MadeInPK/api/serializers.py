@@ -471,18 +471,72 @@ class ComplaintCreateSerializer(serializers.ModelSerializer):
 class WishlistSerializer(serializers.ModelSerializer):
     product_name = serializers.CharField(source='product.name', read_only=True)
     product_image = serializers.SerializerMethodField()
+    seller = serializers.CharField(source='product.seller.username', read_only=True)
+    seller_id = serializers.IntegerField(source='product.seller.id', read_only=True)
+    category = serializers.CharField(source='product.category.name', read_only=True)
+    category_id = serializers.IntegerField(source='product.category.id', read_only=True)
+    price = serializers.SerializerMethodField()
+    stock_status = serializers.SerializerMethodField()
+    listing_type = serializers.SerializerMethodField()
     
     class Meta:
         model = Wishlist
-        fields = ['id', 'product', 'product_name', 'product_image', 'notes', 'created_at']
+        fields = ['id', 'product', 'product_name', 'product_image', 'seller', 'seller_id',
+                  'price', 'category', 'category_id', 'stock_status', 'listing_type', 
+                  'notes', 'created_at']
         read_only_fields = ['created_at']
     
     def get_product_image(self, obj):
+        """Get primary product image URL"""
         primary_image = obj.product.images.filter(is_primary=True).first()
-        if primary_image:
+        if not primary_image:
+            # If no primary image, get the first image
+            primary_image = obj.product.images.first()
+        
+        if primary_image and primary_image.image:
             request = self.context.get('request')
             if request:
                 return request.build_absolute_uri(primary_image.image.url)
+        return None
+    
+    def get_price(self, obj):
+        """Get product price from listing (auction or fixed price)"""
+        if hasattr(obj.product, 'auction'):
+            return {
+                'current_price': str(obj.product.auction.current_price),
+                'starting_price': str(obj.product.auction.starting_price)
+            }
+        elif hasattr(obj.product, 'fixed_price'):
+            return {
+                'price': str(obj.product.fixed_price.price)
+            }
+        return None
+    
+    def get_stock_status(self, obj):
+        """Determine stock status based on listing type"""
+        if hasattr(obj.product, 'auction'):
+            # For auctions, check if active
+            if obj.product.auction.is_active():
+                return 'In Stock'
+            elif obj.product.auction.status == 'completed':
+                return 'Sold'
+            else:
+                return 'Out of Stock'
+        elif hasattr(obj.product, 'fixed_price'):
+            # For fixed price listings, check quantity and status
+            listing = obj.product.fixed_price
+            if listing.status == 'active' and listing.quantity > 0:
+                return 'In Stock'
+            else:
+                return 'Out of Stock'
+        return 'Not Listed'
+    
+    def get_listing_type(self, obj):
+        """Get the type of listing (auction or fixed_price)"""
+        if hasattr(obj.product, 'auction'):
+            return 'auction'
+        elif hasattr(obj.product, 'fixed_price'):
+            return 'fixed_price'
         return None
 
 
