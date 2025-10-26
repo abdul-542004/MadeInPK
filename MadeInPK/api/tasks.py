@@ -10,6 +10,8 @@ def check_auction_endings():
     """Check for auctions that have ended and process winners"""
     from .models import AuctionListing, Order, Notification
     from decimal import Decimal
+    from channels.layers import get_channel_layer
+    from asgiref.sync import async_to_sync
     import uuid
     
     # Get auctions that have ended but not yet processed
@@ -18,6 +20,8 @@ def check_auction_endings():
         status='active',
         end_time__lte=now
     ).select_related('product', 'product__seller')
+    
+    channel_layer = get_channel_layer()
     
     for auction in ended_auctions:
         # Get the winning bid
@@ -73,6 +77,24 @@ def check_auction_endings():
                 auction=auction,
                 order=order
             )
+            
+            # Broadcast auction end to all connected WebSocket clients
+            if channel_layer:
+                room_group_name = f'auction_{auction.id}'
+                async_to_sync(channel_layer.group_send)(
+                    room_group_name,
+                    {
+                        'type': 'auction_ended',
+                        'data': {
+                            'auction_id': auction.id,
+                            'status': 'ended',
+                            'winner': winning_bid.bidder.username,
+                            'final_price': str(winning_bid.amount),
+                            'product_name': auction.product.name,
+                            'message': f'Auction ended! Winner: {winning_bid.bidder.username}'
+                        }
+                    }
+                )
         else:
             # No bids, mark as ended
             auction.status = 'ended'
@@ -86,6 +108,24 @@ def check_auction_endings():
                 message=f'Your auction for {auction.product.name} has ended with no bids.',
                 auction=auction
             )
+            
+            # Broadcast auction end to all connected WebSocket clients
+            if channel_layer:
+                room_group_name = f'auction_{auction.id}'
+                async_to_sync(channel_layer.group_send)(
+                    room_group_name,
+                    {
+                        'type': 'auction_ended',
+                        'data': {
+                            'auction_id': auction.id,
+                            'status': 'ended',
+                            'winner': None,
+                            'final_price': str(auction.current_price),
+                            'product_name': auction.product.name,
+                            'message': 'Auction ended with no bids'
+                        }
+                    }
+                )
 
 
 @shared_task
