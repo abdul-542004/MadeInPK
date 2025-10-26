@@ -13,7 +13,7 @@ import uuid
 from .models import (
     Province, City, Address, Category, Product, ProductImage,
     AuctionListing, Bid, FixedPriceListing, Order, Payment,
-    Feedback, Conversation, Message, Notification, Complaint
+    Feedback, Conversation, Message, Notification, Complaint, Wishlist
 )
 from .serializers import (
     UserRegistrationSerializer, UserSerializer, UserProfileSerializer,
@@ -24,7 +24,7 @@ from .serializers import (
     FixedPriceCreateSerializer, OrderSerializer, OrderCreateSerializer,
     PaymentSerializer, FeedbackSerializer, FeedbackCreateSerializer,
     MessageSerializer, ConversationSerializer, NotificationSerializer,
-    ComplaintSerializer, ComplaintCreateSerializer
+    ComplaintSerializer, ComplaintCreateSerializer, WishlistSerializer, WishlistCreateSerializer
 )
 
 User = get_user_model()
@@ -676,3 +676,33 @@ class ComplaintViewSet(viewsets.ModelViewSet):
         if self.action == 'create':
             return ComplaintCreateSerializer
         return ComplaintSerializer
+
+
+# Wishlist ViewSet
+class WishlistViewSet(viewsets.ModelViewSet):
+    """CRUD operations for user wishlists"""
+    serializer_class = WishlistSerializer
+    permission_classes = [IsAuthenticated]
+    filter_backends = [filters.OrderingFilter]
+    ordering_fields = ['created_at']
+    ordering = ['-created_at']
+    
+    def get_queryset(self):
+        return Wishlist.objects.filter(user=self.request.user).select_related(
+            'product__seller', 'product__category'
+        ).prefetch_related('product__images')
+    
+    def get_serializer_class(self):
+        if self.action == 'create':
+            return WishlistCreateSerializer
+        return WishlistSerializer
+    
+    def perform_create(self, serializer):
+        serializer.save(user=self.request.user)
+    
+    @action(detail=True, methods=['post'])
+    def remove_from_wishlist(self, request, pk=None):
+        """Remove product from wishlist"""
+        wishlist_item = self.get_object()
+        wishlist_item.delete()
+        return Response({'message': 'Product removed from wishlist'})

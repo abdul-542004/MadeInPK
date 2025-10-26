@@ -17,6 +17,7 @@ router.register(r'feedbacks', views.FeedbackViewSet, basename='feedback')
 router.register(r'conversations', views.ConversationViewSet, basename='conversation')
 router.register(r'notifications', views.NotificationViewSet, basename='notification')
 router.register(r'complaints', views.ComplaintViewSet, basename='complaint')
+router.register(r'wishlist', views.WishlistViewSet, basename='wishlist')
 
 urlpatterns = [
     # Authentication endpoints

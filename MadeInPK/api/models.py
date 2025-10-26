@@ -115,7 +115,7 @@ class ProductImage(models.Model):
     product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name='images')
     image = models.ImageField(upload_to='products/', max_length=500, null=True, blank=True)
     is_primary = models.BooleanField(default=False)
-    order = models.IntegerField(default=0)
+    order = models.IntegerField(default=0) # for ordering multiple images
     
     class Meta:
         db_table = 'product_images'
@@ -130,14 +130,13 @@ class AuctionListing(models.Model):
     """Auction listing for a single unique product"""
     STATUS_CHOICES = [
         ('active', 'Active'),
-        ('ended', 'Ended'),
-        ('cancelled', 'Cancelled'),
+        ('ended', 'Ended'), # Auction ended, winner not determined
+        ('cancelled', 'Cancelled'),  # Auction cancelled, winner refused to pay
         ('completed', 'Completed'),  # Payment successful
     ]
     
     product = models.OneToOneField(Product, on_delete=models.CASCADE, related_name='auction')
     starting_price = models.DecimalField(max_digits=10, decimal_places=2, validators=[MinValueValidator(Decimal('0.01'))])
-    reserve_price = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)  # Minimum acceptable price
     current_price = models.DecimalField(max_digits=10, decimal_places=2, validators=[MinValueValidator(Decimal('0.01'))])
     start_time = models.DateTimeField()
     end_time = models.DateTimeField()
@@ -455,3 +454,23 @@ class PaymentViolation(models.Model):
     
     def __str__(self):
         return f"Payment Violation by {self.user.username} - Order {self.order.order_number}"
+
+
+# Wishlist Model
+class Wishlist(models.Model):
+    """User wishlists for saving products they're interested in"""
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='wishlist_items')
+    product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name='wishlist_entries')
+    notes = models.TextField(blank=True)  # Optional personal notes
+    created_at = models.DateTimeField(auto_now_add=True)
+    
+    class Meta:
+        db_table = 'wishlists'
+        unique_together = ['user', 'product']  # Prevent duplicate wishlist entries
+        ordering = ['-created_at']
+    
+    def __str__(self):
+        return f"Wishlist: {self.user.username} - {self.product.name}"
+
+
+# add wishlist model

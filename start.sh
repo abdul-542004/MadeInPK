@@ -23,7 +23,7 @@ fi
 source venv/bin/activate
 
 # Check if Redis is running
-if ! pgrep -x "redis-server" > /dev/null; then
+if ! pgrep -x "redis-server" > /dev/null && ! ss -tlnp | grep -q ":6379 "; then
     echo "⚠️  Redis is not running!"
     echo "Starting Redis..."
     redis-server --daemonize yes

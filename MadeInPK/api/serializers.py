@@ -3,7 +3,7 @@ from django.contrib.auth import get_user_model
 from .models import (
     Province, City, Address, Category, Product, ProductImage,
     AuctionListing, Bid, FixedPriceListing, Order, Payment,
-    Feedback, Conversation, Message, Notification, Complaint
+    Feedback, Conversation, Message, Notification, Complaint, Wishlist
 )
 
 User = get_user_model()
@@ -463,5 +463,41 @@ class ComplaintCreateSerializer(serializers.ModelSerializer):
     def create(self, validated_data):
         import uuid
         validated_data['complaint_number'] = f"CMP-{uuid.uuid4().hex[:12].upper()}"
+        validated_data['user'] = self.context['request'].user
+        return super().create(validated_data)
+
+
+# Wishlist Serializers
+class WishlistSerializer(serializers.ModelSerializer):
+    product_name = serializers.CharField(source='product.name', read_only=True)
+    product_image = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = Wishlist
+        fields = ['id', 'product', 'product_name', 'product_image', 'notes', 'created_at']
+        read_only_fields = ['created_at']
+    
+    def get_product_image(self, obj):
+        primary_image = obj.product.images.filter(is_primary=True).first()
+        if primary_image:
+            request = self.context.get('request')
+            if request:
+                return request.build_absolute_uri(primary_image.image.url)
+        return None
+
+
+class WishlistCreateSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Wishlist
+        fields = ['product', 'notes']
+    
+    def validate_product(self, value):
+        user = self.context['request'].user
+        # Check if already in wishlist
+        if Wishlist.objects.filter(user=user, product=value).exists():
+            raise serializers.ValidationError("Product is already in your wishlist")
+        return value
+    
+    def create(self, validated_data):
         validated_data['user'] = self.context['request'].user
         return super().create(validated_data)
