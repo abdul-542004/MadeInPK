@@ -331,7 +331,7 @@ class FixedPriceListingSerializer(serializers.ModelSerializer):
     
     class Meta:
         model = FixedPriceListing
-        fields = ['id', 'product', 'price', 'quantity', 'status', 'created_at', 'updated_at']
+        fields = ['id', 'product', 'price', 'quantity', 'status', 'featured', 'created_at', 'updated_at']
         read_only_fields = ['status', 'created_at', 'updated_at']
 
 
@@ -340,7 +340,7 @@ class FixedPriceCreateSerializer(serializers.ModelSerializer):
     
     class Meta:
         model = FixedPriceListing
-        fields = ['product_id', 'price', 'quantity']
+        fields = ['product_id', 'price', 'quantity', 'featured']
     
     def validate_product_id(self, value):
         try:

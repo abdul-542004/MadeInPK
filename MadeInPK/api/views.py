@@ -331,6 +331,13 @@ class FixedPriceListingViewSet(viewsets.ModelViewSet):
         if max_price:
             queryset = queryset.filter(price__lte=max_price)
         
+        # Featured filter
+        featured = self.request.query_params.get('featured')
+        if featured == 'true':
+            queryset = queryset.filter(featured=True)
+        elif featured == 'false':
+            queryset = queryset.filter(featured=False)
+        
         return queryset
     
     @action(detail=True, methods=['post'], permission_classes=[IsAuthenticated])

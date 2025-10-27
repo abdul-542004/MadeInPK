@@ -9,4 +9,5 @@ node_modules/
 dist/
 *.log
 frontend
+media/
 MadeInPK-frontend/
