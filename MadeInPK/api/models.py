@@ -17,6 +17,7 @@ class User(AbstractUser):
     
     email = models.EmailField(unique=True)
     phone_number = models.CharField(max_length=15, blank=True)
+    profile_picture = models.ImageField(upload_to='profiles/', null=True, blank=True)
     role = models.CharField(max_length=10, choices=ROLE_CHOICES, default='buyer')
     is_blocked = models.BooleanField(default=False)  # For blocking non-paying bidders
     failed_payment_count = models.IntegerField(default=0)  # Track failed payments

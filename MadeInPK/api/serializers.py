@@ -31,12 +31,20 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
 
 
 class UserSerializer(serializers.ModelSerializer):
+    profile_picture_url = serializers.SerializerMethodField()
+    
     class Meta:
         model = User
         fields = ['id', 'username', 'email', 'first_name', 'last_name', 
-                  'phone_number', 'role', 'is_blocked', 'failed_payment_count', 
+                  'phone_number', 'profile_picture', 'profile_picture_url', 'role', 'is_blocked', 'failed_payment_count', 
                   'created_at']
         read_only_fields = ['is_blocked', 'failed_payment_count']
+    
+    def get_profile_picture_url(self, obj):
+        request = self.context.get('request')
+        if obj.profile_picture and request:
+            return request.build_absolute_uri(obj.profile_picture.url)
+        return None
 
 
 class UserProfileSerializer(serializers.ModelSerializer):
@@ -44,12 +52,19 @@ class UserProfileSerializer(serializers.ModelSerializer):
     total_purchases = serializers.SerializerMethodField()
     average_seller_rating = serializers.SerializerMethodField()
     seller_profile = serializers.SerializerMethodField()
+    profile_picture_url = serializers.SerializerMethodField()
     
     class Meta:
         model = User
         fields = ['id', 'username', 'email', 'first_name', 'last_name', 
-                  'phone_number', 'role', 'created_at', 'total_sales', 
+                  'phone_number', 'profile_picture', 'profile_picture_url', 'role', 'created_at', 'total_sales', 
                   'total_purchases', 'average_seller_rating', 'seller_profile']
+    
+    def get_profile_picture_url(self, obj):
+        request = self.context.get('request')
+        if obj.profile_picture and request:
+            return request.build_absolute_uri(obj.profile_picture.url)
+        return None
     
     def get_total_sales(self, obj):
         return obj.sales.filter(status='delivered').count()
