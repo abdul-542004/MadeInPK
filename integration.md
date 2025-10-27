@@ -1,0 +1,6 @@
+I am making an app called MadeInPK. MadeInPK is a dedicated e-commerce(C2C) platform that empowers Pakistani artisans, manufacturers, and small businesses by combining fixed-price selling with real-time auctions.Unlike traditional platforms that only offer fixed prices, MadeInPK enables competitive bidding, ensuring sellers can maximize profits while buyers enjoy fair, demand-driven prices. I have used React on frontend, Postgresql as db and DRF+django on backend. 
+
+The django app is complete (I have worked on the backend and my friend has worked on the frontend) and frontend is almost complete. Now the we need to connect these both apps.
+REST APIs are used for normal models(users, payments, orders, reviews etc) and for realtime auction/bidding I have configured django channels.
+
+Can you help me accomplish this integration? The fronted is in the folder 'MadeInPK-frontend' while backend is in 'MadeInPK' folder. You would have to read the models,views and serializers of the backend in deep to make this integration successful. 

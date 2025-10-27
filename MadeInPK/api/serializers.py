@@ -233,7 +233,7 @@ class AuctionListingSerializer(serializers.ModelSerializer):
     
     class Meta:
         model = AuctionListing
-        fields = ['id', 'product', 'starting_price', 'reserve_price', 'current_price',
+        fields = ['id', 'product', 'starting_price', 'current_price',
                   'start_time', 'end_time', 'status', 'winner', 'winner_username',
                   'latest_bids', 'total_bids', 'time_remaining', 'created_at']
         read_only_fields = ['current_price', 'status', 'winner', 'created_at']
@@ -258,7 +258,7 @@ class AuctionCreateSerializer(serializers.ModelSerializer):
     
     class Meta:
         model = AuctionListing
-        fields = ['product_id', 'starting_price', 'reserve_price', 'start_time', 'end_time']
+        fields = ['product_id', 'starting_price', 'start_time', 'end_time']
     
     def validate_product_id(self, value):
         try:
@@ -276,8 +276,6 @@ class AuctionCreateSerializer(serializers.ModelSerializer):
     def validate(self, data):
         if data['end_time'] <= data['start_time']:
             raise serializers.ValidationError("End time must be after start time")
-        if data.get('reserve_price') and data['reserve_price'] < data['starting_price']:
-            raise serializers.ValidationError("Reserve price cannot be less than starting price")
         return data
     
     def create(self, validated_data):
