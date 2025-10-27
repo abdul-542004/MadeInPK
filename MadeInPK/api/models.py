@@ -15,6 +15,7 @@ class User(AbstractUser):
         ('admin', 'Admin'),
     ]
     
+    email = models.EmailField(unique=True)
     phone_number = models.CharField(max_length=15, blank=True)
     role = models.CharField(max_length=10, choices=ROLE_CHOICES, default='buyer')
     is_blocked = models.BooleanField(default=False)  # For blocking non-paying bidders
@@ -23,6 +24,9 @@ class User(AbstractUser):
     stripe_account_id = models.CharField(max_length=255, blank=True, null=True)  # For sellers (Stripe Connect)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+    
+    USERNAME_FIELD = 'email'
+    REQUIRED_FIELDS = ['username']
     
     class Meta:
         db_table = 'users'
