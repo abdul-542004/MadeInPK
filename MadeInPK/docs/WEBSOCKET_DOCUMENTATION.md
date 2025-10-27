@@ -1,0 +1,652 @@
+# MadeInPK WebSocket Documentation
+
+**Base WebSocket URL:** `ws://localhost:8000/ws/`
+
+---
+
+## Overview
+
+MadeInPK uses Django Channels for real-time bidding functionality. WebSocket connections enable live auction updates without polling, providing instant notifications when bids are placed.
+
+---
+
+## Auction WebSocket
+
+### Connection Endpoint
+
+```
+ws://localhost:8000/ws/auction/{auction_id}/
+```
+
+**Authentication:** Token-based (pass token in query parameter)
+
+### Example Connection URLs
+
+```
+ws://localhost:8000/ws/auction/1/?token=a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6q7r8s9t0
+ws://localhost:8000/ws/auction/2/?token=a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6q7r8s9t0
+```
+
+---
+
+## JavaScript/React Connection Setup
+
+### Basic WebSocket Connection
+
+```javascript
+const auctionId = 1;
+const token = localStorage.getItem('authToken');
+
+// Create WebSocket connection
+const socket = new WebSocket(
+  `ws://localhost:8000/ws/auction/${auctionId}/?token=${token}`
+);
+
+// Connection opened
+socket.onopen = (event) => {
+  console.log('Connected to auction:', auctionId);
+};
+
+// Listen for messages
+socket.onmessage = (event) => {
+  const data = JSON.parse(event.data);
+  console.log('Received:', data);
+  handleAuctionUpdate(data);
+};
+
+// Handle errors
+socket.onerror = (error) => {
+  console.error('WebSocket error:', error);
+};
+
+// Connection closed
+socket.onclose = (event) => {
+  console.log('Disconnected from auction');
+  if (event.wasClean) {
+    console.log(`Closed cleanly, code=${event.code}, reason=${event.reason}`);
+  } else {
+    console.log('Connection died');
+  }
+};
+```
+
+---
+
+## Message Types
+
+### 1. Initial Connection Response (Server → Client)
+
+When you successfully connect to an auction, the server immediately sends the current auction status.
+
+**Message Type:** `auction_status`
+
+**Example Response:**
+
+```json
+{
+  "type": "auction_status",
+  "data": {
+    "auction_id": 1,
+    "product_name": "Handwoven Pashmina Shawl",
+    "current_price": "2875.00",
+    "status": "active",
+    "end_time": "2025-10-29T23:27:00Z",
+    "latest_bids": [
+      {
+        "bidder": "buyer2",
+        "amount": "2875.00",
+        "time": "2025-10-27T18:32:00Z"
+      },
+      {
+        "bidder": "buyer1",
+        "amount": "2750.00",
+        "time": "2025-10-27T18:15:00Z"
+      },
+      {
+        "bidder": "buyer3",
+        "amount": "2625.00",
+        "time": "2025-10-27T18:00:00Z"
+      },
+      {
+        "bidder": "buyer2",
+        "amount": "2500.00",
+        "time": "2025-10-27T17:45:00Z"
+      }
+    ]
+  }
+}
+```
+
+**Fields:**
+- `auction_id` - Auction identifier
+- `product_name` - Name of the product being auctioned
+- `current_price` - Current highest bid amount
+- `status` - Auction status (active, ended, cancelled, completed)
+- `end_time` - ISO 8601 timestamp when auction ends
+- `latest_bids` - Array of last 5 bids (most recent first)
+
+---
+
+### 2. Place a Bid (Client → Server)
+
+Send this message to place a bid on the auction.
+
+**Message Type:** `place_bid`
+
+**Request Format:**
+
+```json
+{
+  "type": "place_bid",
+  "amount": 3000.00
+}
+```
+
+**JavaScript Example:**
+
+```javascript
+function placeBid(amount) {
+  const bidData = {
+    type: 'place_bid',
+    amount: parseFloat(amount)
+  };
+  
+  socket.send(JSON.stringify(bidData));
+}
+
+// Usage
+placeBid(3000.00);
+```
+
+**Validation Rules:**
+- Amount must be higher than current price
+- User must be authenticated
+- User cannot bid on their own auction
+- User account must not be blocked
+- Auction must be active
+
+---
+
+### 3. New Bid Notification (Server → All Clients)
+
+When any user successfully places a bid, ALL connected clients watching this auction receive this notification.
+
+**Message Type:** `new_bid`
+
+**Example Response:**
+
+```json
+{
+  "type": "new_bid",
+  "data": {
+    "bidder": "buyer1",
+    "amount": "3000.00",
+    "time": "2025-10-27T18:45:00Z",
+    "current_price": "3000.00"
+  }
+}
+```
+
+**Fields:**
+- `bidder` - Username of the bidder
+- `amount` - Bid amount
+- `time` - ISO 8601 timestamp when bid was placed
+- `current_price` - Updated current price (same as amount)
+
+**Use Case:** Update UI to show new highest bid and notify users they've been outbid.
+
+---
+
+### 4. Error Response (Server → Client)
+
+If a bid fails validation, only the user who attempted the bid receives an error message.
+
+**Message Type:** `error`
+
+**Example Response:**
+
+```json
+{
+  "type": "error",
+  "message": "Bid must be higher than current price of 2875.00"
+}
+```
+
+**Possible Error Messages:**
+
+| Error Message | Cause |
+|---------------|-------|
+| `"Auction is not active"` | Auction has ended or hasn't started |
+| `"Your account is blocked"` | User account is blocked due to payment violations |
+| `"Bid must be higher than current price of X"` | Bid amount is too low |
+| `"You cannot bid on your own auction"` | Seller trying to bid on their own item |
+| `"Auction not found"` | Invalid auction ID |
+
+---
+
+### 5. Auction Ended (Server → All Clients)
+
+When an auction ends (either by time expiration or manual closure), all connected clients receive this notification.
+
+**Message Type:** `auction_ended`
+
+**Example Response:**
+
+```json
+{
+  "type": "auction_ended",
+  "data": {
+    "auction_id": 1,
+    "winner": "buyer1",
+    "final_price": "3000.00",
+    "status": "ended"
+  }
+}
+```
+
+**Fields:**
+- `auction_id` - Auction identifier
+- `winner` - Username of the winning bidder
+- `final_price` - Final winning bid amount
+- `status` - New auction status (ended)
+
+---
+
+## Complete React Hook Example
+
+Here's a production-ready React hook for managing auction WebSocket connections:
+
+```javascript
+import { useEffect, useState, useRef, useCallback } from 'react';
+
+/**
+ * Custom hook for managing auction WebSocket connection
+ * @param {number} auctionId - The auction ID to connect to
+ * @param {string} token - Authentication token
+ * @returns {object} - { auctionData, isConnected, placeBid, error }
+ */
+function useAuctionWebSocket(auctionId, token) {
+  const [auctionData, setAuctionData] = useState(null);
+  const [isConnected, setIsConnected] = useState(false);
+  const [error, setError] = useState(null);
+  const socketRef = useRef(null);
+  const reconnectTimeoutRef = useRef(null);
+
+  // Place bid function
+  const placeBid = useCallback((amount) => {
+    if (socketRef.current && isConnected) {
+      const bidData = {
+        type: 'place_bid',
+        amount: parseFloat(amount)
+      };
+      socketRef.current.send(JSON.stringify(bidData));
+      return true;
+    }
+    console.error('Cannot place bid: WebSocket not connected');
+    return false;
+  }, [isConnected]);
+
+  useEffect(() => {
+    if (!auctionId || !token) return;
+
+    // Create WebSocket connection
+    const wsUrl = `ws://localhost:8000/ws/auction/${auctionId}/?token=${token}`;
+    socketRef.current = new WebSocket(wsUrl);
+
+    socketRef.current.onopen = () => {
+      console.log('WebSocket Connected to auction:', auctionId);
+      setIsConnected(true);
+      setError(null);
+    };
+
+    socketRef.current.onmessage = (event) => {
+      const data = JSON.parse(event.data);
+      
+      switch(data.type) {
+        case 'auction_status':
+          // Initial auction data
+          setAuctionData(data.data);
+          break;
+          
+        case 'new_bid':
+          // Update auction with new bid
+          setAuctionData(prev => {
+            if (!prev) return prev;
+            
+            return {
+              ...prev,
+              current_price: data.data.current_price,
+              latest_bids: [
+                data.data,
+                ...prev.latest_bids.slice(0, 4) // Keep only 5 most recent
+              ]
+            };
+          });
+          break;
+          
+        case 'auction_ended':
+          // Auction has ended
+          setAuctionData(prev => ({
+            ...prev,
+            status: 'ended',
+            winner: data.data.winner,
+            final_price: data.data.final_price
+          }));
+          break;
+          
+        case 'error':
+          // Error from server
+          setError(data.message);
+          // Clear error after 5 seconds
+          setTimeout(() => setError(null), 5000);
+          break;
+          
+        default:
+          console.warn('Unknown message type:', data.type);
+      }
+    };
+
+    socketRef.current.onerror = (error) => {
+      console.error('WebSocket error:', error);
+      setError('Connection error occurred');
+    };
+
+    socketRef.current.onclose = (event) => {
+      console.log('WebSocket Disconnected');
+      setIsConnected(false);
+      
+      // Attempt to reconnect after 3 seconds
+      if (!event.wasClean) {
+        reconnectTimeoutRef.current = setTimeout(() => {
+          console.log('Attempting to reconnect...');
+          // Trigger re-render to reconnect
+          setAuctionData(prev => ({ ...prev }));
+        }, 3000);
+      }
+    };
+
+    // Cleanup on unmount
+    return () => {
+      if (reconnectTimeoutRef.current) {
+        clearTimeout(reconnectTimeoutRef.current);
+      }
+      if (socketRef.current) {
+        socketRef.current.close();
+      }
+    };
+  }, [auctionId, token]);
+
+  return { 
+    auctionData, 
+    isConnected, 
+    placeBid, 
+    error 
+  };
+}
+
+export default useAuctionWebSocket;
+```
+
+---
+
+## Usage in React Component
+
+```javascript
+import React, { useState } from 'react';
+import useAuctionWebSocket from './hooks/useAuctionWebSocket';
+
+function AuctionPage({ auctionId }) {
+  const token = localStorage.getItem('authToken');
+  const { auctionData, isConnected, placeBid, error } = useAuctionWebSocket(auctionId, token);
+  const [bidAmount, setBidAmount] = useState('');
+
+  const handleBidSubmit = (e) => {
+    e.preventDefault();
+    
+    if (!bidAmount || parseFloat(bidAmount) <= 0) {
+      alert('Please enter a valid bid amount');
+      return;
+    }
+
+    const success = placeBid(bidAmount);
+    if (success) {
+      setBidAmount(''); // Clear input
+    }
+  };
+
+  if (!auctionData) {
+    return <div>Loading auction data...</div>;
+  }
+
+  const timeRemaining = new Date(auctionData.end_time) - new Date();
+  const isActive = auctionData.status === 'active' && timeRemaining > 0;
+
+  return (
+    <div className="auction-page">
+      {/* Connection Status */}
+      <div className="connection-status">
+        {isConnected ? (
+          <span className="status-connected">🟢 Live</span>
+        ) : (
+          <span className="status-disconnected">🔴 Disconnected</span>
+        )}
+      </div>
+
+      {/* Error Display */}
+      {error && (
+        <div className="error-message">
+          ⚠️ {error}
+        </div>
+      )}
+
+      {/* Auction Info */}
+      <h1>{auctionData.product_name}</h1>
+      <div className="auction-info">
+        <p className="current-price">
+          Current Price: <strong>PKR {auctionData.current_price}</strong>
+        </p>
+        <p className="status">
+          Status: <span className={`status-${auctionData.status}`}>
+            {auctionData.status.toUpperCase()}
+          </span>
+        </p>
+        <p className="end-time">
+          Ends: {new Date(auctionData.end_time).toLocaleString()}
+        </p>
+      </div>
+
+      {/* Bid Form */}
+      {isActive && (
+        <form onSubmit={handleBidSubmit} className="bid-form">
+          <input
+            type="number"
+            step="0.01"
+            min={parseFloat(auctionData.current_price) + 0.01}
+            value={bidAmount}
+            onChange={(e) => setBidAmount(e.target.value)}
+            placeholder={`Min: ${parseFloat(auctionData.current_price) + 1}`}
+            required
+          />
+          <button type="submit" disabled={!isConnected}>
+            Place Bid
+          </button>
+        </form>
+      )}
+
+      {/* Bid History */}
+      <div className="bid-history">
+        <h3>Recent Bids</h3>
+        {auctionData.latest_bids && auctionData.latest_bids.length > 0 ? (
+          <ul>
+            {auctionData.latest_bids.map((bid, index) => (
+              <li key={index} className={index === 0 ? 'winning-bid' : ''}>
+                <span className="bidder">{bid.bidder}</span>
+                <span className="amount">PKR {bid.amount}</span>
+                <span className="time">
+                  {new Date(bid.time).toLocaleTimeString()}
+                </span>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p>No bids yet. Be the first to bid!</p>
+        )}
+      </div>
+
+      {/* Auction Ended */}
+      {auctionData.status === 'ended' && auctionData.winner && (
+        <div className="auction-ended">
+          <h2>Auction Ended</h2>
+          <p>Winner: <strong>{auctionData.winner}</strong></p>
+          <p>Final Price: <strong>PKR {auctionData.final_price || auctionData.current_price}</strong></p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+export default AuctionPage;
+```
+
+---
+
+## Testing WebSocket Connection
+
+### Using Browser Console
+
+```javascript
+// Open browser console and run:
+const ws = new WebSocket('ws://localhost:8000/ws/auction/1/?token=YOUR_TOKEN');
+
+ws.onopen = () => console.log('Connected');
+ws.onmessage = (e) => console.log('Message:', JSON.parse(e.data));
+
+// Place a test bid
+ws.send(JSON.stringify({ type: 'place_bid', amount: 3000 }));
+```
+
+### Using wscat (CLI tool)
+
+```bash
+# Install wscat
+npm install -g wscat
+
+# Connect to auction
+wscat -c "ws://localhost:8000/ws/auction/1/?token=YOUR_TOKEN"
+
+# Send bid
+> {"type": "place_bid", "amount": 3000}
+```
+
+---
+
+## Best Practices
+
+### 1. Handle Reconnection
+
+Always implement reconnection logic for dropped connections:
+
+```javascript
+let reconnectAttempts = 0;
+const maxReconnectAttempts = 5;
+
+function connectWebSocket() {
+  const socket = new WebSocket(wsUrl);
+  
+  socket.onclose = () => {
+    if (reconnectAttempts < maxReconnectAttempts) {
+      reconnectAttempts++;
+      setTimeout(connectWebSocket, 3000 * reconnectAttempts);
+    }
+  };
+  
+  socket.onopen = () => {
+    reconnectAttempts = 0; // Reset on successful connection
+  };
+}
+```
+
+### 2. Validate Before Sending
+
+```javascript
+function placeBid(amount) {
+  // Client-side validation
+  if (!socket || socket.readyState !== WebSocket.OPEN) {
+    console.error('WebSocket not connected');
+    return false;
+  }
+  
+  if (amount <= currentPrice) {
+    console.error('Bid must be higher than current price');
+    return false;
+  }
+  
+  socket.send(JSON.stringify({ type: 'place_bid', amount }));
+  return true;
+}
+```
+
+### 3. Clean Up Resources
+
+```javascript
+useEffect(() => {
+  const socket = new WebSocket(wsUrl);
+  
+  return () => {
+    // Always close socket on unmount
+    if (socket.readyState === WebSocket.OPEN) {
+      socket.close();
+    }
+  };
+}, []);
+```
+
+### 4. Handle Multiple Tabs
+
+If user opens multiple tabs, each will have its own WebSocket connection. Consider using BroadcastChannel API to sync state across tabs.
+
+---
+
+## Troubleshooting
+
+### Connection Refused
+
+**Error:** `WebSocket connection failed`
+
+**Solutions:**
+- Ensure Django server is running
+- Check if Redis is running (required for Channels)
+- Verify ASGI configuration in settings.py
+
+### Authentication Failed
+
+**Error:** Connection closes immediately after opening
+
+**Solutions:**
+- Verify token is valid and not expired
+- Check token format in URL: `?token=YOUR_TOKEN`
+- Ensure user is authenticated
+
+### Messages Not Received
+
+**Solutions:**
+- Check browser console for errors
+- Verify JSON.parse() is used on received messages
+- Ensure onmessage handler is properly set
+
+---
+
+## Sample Auction IDs (from populate_db)
+
+| Auction ID | Product Name | Starting Price |
+|------------|--------------|----------------|
+| 1 | Handwoven Pashmina Shawl | PKR 2,500 |
+| 2 | Silk Bedspread Set | PKR 8,500 |
+| 3 | Wooden Jewelry Box | PKR 1,800 |
+| 4 | Ceramic Dinner Set | PKR 4,200 |
+| 5 | Gold-Plated Earrings Set | PKR 1,200 |
+| 6 | Kashmiri Silk Carpet | PKR 25,000 |
+
+---
+
+**End of WebSocket Documentation**
