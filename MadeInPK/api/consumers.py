@@ -81,17 +81,75 @@ class AuctionConsumer(AsyncWebsocketConsumer):
     def get_auction_data(self):
         """Get current auction status"""
         from .models import AuctionListing, Bid
+        from django.conf import settings
         
         try:
-            auction = AuctionListing.objects.select_related('product', 'winner').get(id=self.auction_id)
+            auction = AuctionListing.objects.select_related(
+                'product', 
+                'product__seller',
+                'product__seller__seller_profile',
+                'product__category',
+                'winner'
+            ).prefetch_related('product__images').get(id=self.auction_id)
+            
             latest_bids = auction.bids.select_related('bidder').order_by('-bid_time')[:5]
+            
+            # Get seller information
+            seller = auction.product.seller
+            seller_data = {
+                'id': seller.id,
+                'username': seller.username,
+                'email': seller.email,
+            }
+            
+            # Add seller profile data if exists
+            if hasattr(seller, 'seller_profile'):
+                profile = seller.seller_profile
+                seller_data.update({
+                    'brand_name': profile.brand_name,
+                    'biography': profile.biography,
+                    'is_verified': profile.is_verified,
+                    'average_rating': str(profile.average_rating),
+                    'total_feedbacks': profile.total_feedbacks,
+                })
+            
+            # Get product images
+            images = auction.product.images.all().order_by('order')
+            image_urls = []
+            for img in images:
+                if img.image:
+                    # Build full URL for image
+                    image_url = img.image.url
+                    if not image_url.startswith('http'):
+                        # Prepend media URL if it's a relative path
+                        image_url = f"{settings.MEDIA_URL}{img.image.name}" if not image_url.startswith('/') else image_url
+                    image_urls.append({
+                        'url': image_url,
+                        'is_primary': img.is_primary,
+                        'order': img.order
+                    })
             
             return {
                 'auction_id': auction.id,
-                'product_name': auction.product.name,
+                'product': {
+                    'id': auction.product.id,
+                    'name': auction.product.name,
+                    'description': auction.product.description,
+                    'condition': auction.product.condition,
+                    'category': auction.product.category.name if auction.product.category else None,
+                    'images': image_urls,
+                },
+                'seller': seller_data,
+                'starting_price': str(auction.starting_price),
                 'current_price': str(auction.current_price),
-                'status': auction.status,
+                'start_time': auction.start_time.isoformat(),
                 'end_time': auction.end_time.isoformat(),
+                'status': auction.status,
+                'is_active': auction.is_active(),
+                'winner': {
+                    'id': auction.winner.id,
+                    'username': auction.winner.username
+                } if auction.winner else None,
                 'latest_bids': [
                     {
                         'bidder': bid.bidder.username,
@@ -99,7 +157,8 @@ class AuctionConsumer(AsyncWebsocketConsumer):
                         'time': bid.bid_time.isoformat()
                     }
                     for bid in latest_bids
-                ]
+                ],
+                'total_bids': auction.bids.count(),
             }
         except AuctionListing.DoesNotExist:
             return {'error': 'Auction not found'}

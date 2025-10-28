@@ -2,11 +2,20 @@
 
 **Base WebSocket URL:** `ws://localhost:8000/ws/`
 
+> **📝 Last Updated:** October 29, 2025  
+> **✨ Recent Changes:** Enhanced initial connection response to include comprehensive product details, seller information with ratings, product images, start time, and total bid count.
+
 ---
 
 ## Overview
 
 MadeInPK uses Django Channels for real-time bidding functionality. WebSocket connections enable live auction updates without polling, providing instant notifications when bids are placed.
+
+Upon connection, the server immediately sends complete auction data including:
+- **Product details** (name, description, condition, category, images)
+- **Seller information** (brand name, biography, verification status, ratings)
+- **Auction details** (starting price, current price, start/end times, bid history)
+- **Real-time updates** (new bids, auction status changes)
 
 ---
 
@@ -76,7 +85,7 @@ socket.onclose = (event) => {
 
 ### 1. Initial Connection Response (Server → Client)
 
-When you successfully connect to an auction, the server immediately sends the current auction status.
+When you successfully connect to an auction, the server immediately sends comprehensive auction data including product details, seller information, and images.
 
 **Message Type:** `auction_status`
 
@@ -87,10 +96,48 @@ When you successfully connect to an auction, the server immediately sends the cu
   "type": "auction_status",
   "data": {
     "auction_id": 1,
-    "product_name": "Handwoven Pashmina Shawl",
+    "product": {
+      "id": 1,
+      "name": "Handwoven Pashmina Shawl",
+      "description": "Luxurious handwoven Pashmina shawl made from the finest Kashmiri wool. Features intricate embroidery and traditional patterns. Perfect for special occasions or as a statement piece.",
+      "condition": "new",
+      "category": "Textiles & Fabrics",
+      "images": [
+        {
+          "url": "/media/products/shawl_primary.jpg",
+          "is_primary": true,
+          "order": 0
+        },
+        {
+          "url": "/media/products/shawl_detail1.jpg",
+          "is_primary": false,
+          "order": 1
+        },
+        {
+          "url": "/media/products/shawl_detail2.jpg",
+          "is_primary": false,
+          "order": 2
+        }
+      ]
+    },
+    "seller": {
+      "id": 5,
+      "username": "kashmiri_crafts",
+      "email": "seller@example.com",
+      "brand_name": "Kashmiri Heritage Crafts",
+      "biography": "We specialize in authentic Kashmiri handicrafts, bringing you the finest traditional products directly from local artisans.",
+      "is_verified": true,
+      "average_rating": "4.85",
+      "total_feedbacks": 127
+    },
+    "starting_price": "2500.00",
     "current_price": "2875.00",
-    "status": "active",
+    "start_time": "2025-10-27T10:00:00Z",
     "end_time": "2025-10-29T23:27:00Z",
+    "status": "active",
+    "is_active": true,
+    "winner": null,
+    "total_bids": 12,
     "latest_bids": [
       {
         "bidder": "buyer2",
@@ -118,11 +165,40 @@ When you successfully connect to an auction, the server immediately sends the cu
 ```
 
 **Fields:**
+
+#### Product Object
+- `id` - Product identifier
+- `name` - Product name
+- `description` - Full product description
+- `condition` - Product condition (new, like_new, good, fair)
+- `category` - Product category name
+- `images` - Array of product images
+  - `url` - Image URL (relative path from media root)
+  - `is_primary` - Boolean indicating if this is the primary image
+  - `order` - Display order for images
+
+#### Seller Object
+- `id` - Seller user ID
+- `username` - Seller username
+- `email` - Seller email address
+- `brand_name` - Seller's brand/business name (if available)
+- `biography` - Seller's business description (if available)
+- `is_verified` - Boolean indicating if seller is verified by admin
+- `average_rating` - Seller's average rating (0.00 to 5.00)
+- `total_feedbacks` - Total number of feedbacks received
+
+#### Auction Details
 - `auction_id` - Auction identifier
-- `product_name` - Name of the product being auctioned
+- `starting_price` - Initial auction starting price
 - `current_price` - Current highest bid amount
-- `status` - Auction status (active, ended, cancelled, completed)
+- `start_time` - ISO 8601 timestamp when auction started
 - `end_time` - ISO 8601 timestamp when auction ends
+- `status` - Auction status (active, ended, cancelled, completed)
+- `is_active` - Boolean indicating if auction is currently active
+- `winner` - Winner object (null if no winner yet)
+  - `id` - Winner user ID
+  - `username` - Winner username
+- `total_bids` - Total number of bids placed
 - `latest_bids` - Array of last 5 bids (most recent first)
 
 ---
@@ -439,9 +515,38 @@ function AuctionPage({ auctionId }) {
         </div>
       )}
 
+      {/* Product Images */}
+      <div className="product-images">
+        {auctionData.product.images && auctionData.product.images.length > 0 ? (
+          <img 
+            src={auctionData.product.images.find(img => img.is_primary)?.url || auctionData.product.images[0].url}
+            alt={auctionData.product.name}
+            className="primary-image"
+          />
+        ) : (
+          <div className="no-image">No image available</div>
+        )}
+      </div>
+
       {/* Auction Info */}
-      <h1>{auctionData.product_name}</h1>
+      <h1>{auctionData.product.name}</h1>
+      <p className="product-description">{auctionData.product.description}</p>
+      <p className="product-condition">
+        Condition: <strong>{auctionData.product.condition}</strong>
+      </p>
+      
+      {/* Seller Info */}
+      <div className="seller-info">
+        <h3>Seller: {auctionData.seller.brand_name || auctionData.seller.username}</h3>
+        {auctionData.seller.is_verified && <span className="verified-badge">✓ Verified</span>}
+        <p>Rating: {auctionData.seller.average_rating} ⭐ ({auctionData.seller.total_feedbacks} reviews)</p>
+        {auctionData.seller.biography && <p className="seller-bio">{auctionData.seller.biography}</p>}
+      </div>
+
       <div className="auction-info">
+        <p className="starting-price">
+          Starting Price: <strong>PKR {auctionData.starting_price}</strong>
+        </p>
         <p className="current-price">
           Current Price: <strong>PKR {auctionData.current_price}</strong>
         </p>
@@ -450,8 +555,14 @@ function AuctionPage({ auctionId }) {
             {auctionData.status.toUpperCase()}
           </span>
         </p>
+        <p className="start-time">
+          Started: {new Date(auctionData.start_time).toLocaleString()}
+        </p>
         <p className="end-time">
           Ends: {new Date(auctionData.end_time).toLocaleString()}
+        </p>
+        <p className="total-bids">
+          Total Bids: <strong>{auctionData.total_bids}</strong>
         </p>
       </div>
 
