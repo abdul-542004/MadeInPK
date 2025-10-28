@@ -44,6 +44,14 @@ class AuctionConsumer(AsyncWebsocketConsumer):
             bid_amount = data.get('amount')
             user = self.scope.get('user')
             
+            # Check if user is authenticated
+            if not user or user.is_anonymous:
+                await self.send(text_data=json.dumps({
+                    'type': 'error',
+                    'message': 'You must be authenticated to place a bid'
+                }))
+                return
+            
             # Validate and place bid
             result = await self.place_bid(self.auction_id, user, bid_amount)
             
