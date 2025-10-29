@@ -25,7 +25,8 @@ from .serializers import (
     PaymentSerializer, FeedbackSerializer, FeedbackCreateSerializer,
     MessageSerializer, ConversationSerializer, NotificationSerializer,
     ComplaintSerializer, ComplaintCreateSerializer, WishlistSerializer, WishlistCreateSerializer, 
-    SellerProfileSerializer, ProductReviewSerializer, ProductReviewCreateSerializer
+    SellerProfileSerializer, ProductReviewSerializer, ProductReviewCreateSerializer,
+    BecomeSellerSerializer
 )
 
 User = get_user_model()
@@ -83,6 +84,46 @@ def profile(request):
     """Get current user profile"""
     serializer = UserProfileSerializer(request.user)
     return Response(serializer.data)
+
+
+@api_view(['GET', 'POST'])
+@permission_classes([IsAuthenticated])
+def become_seller(request):
+    """Allows a buyer to upgrade to seller role and create seller profile"""
+    
+    if request.method == 'GET':
+        # Check if user can become a seller
+        user = request.user
+        can_become_seller = user.role == 'buyer' and not hasattr(user, 'seller_profile')
+        
+        return Response({
+            'can_become_seller': can_become_seller,
+            'current_role': user.role,
+            'has_seller_profile': hasattr(user, 'seller_profile'),
+            'message': 'You can upgrade to seller' if can_become_seller else 'You already have seller capabilities or a seller profile'
+        })
+    
+    # POST request - upgrade to seller
+    serializer = BecomeSellerSerializer(data=request.data, context={'request': request})
+    
+    if serializer.is_valid():
+        result = serializer.save()
+        
+        # Create notification for user
+        Notification.objects.create(
+            user=result['user'],
+            notification_type='general',
+            title='Welcome to Selling on MadeInPK!',
+            message='Your seller account has been created successfully. You can now start listing products for sale.'
+        )
+        
+        return Response({
+            'message': 'Successfully upgraded to seller',
+            'user': UserSerializer(result['user']).data,
+            'seller_profile': SellerProfileSerializer(result['seller_profile']).data
+        }, status=status.HTTP_201_CREATED)
+    
+    return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
 # Location ViewSets

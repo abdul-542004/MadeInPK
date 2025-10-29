@@ -732,6 +732,124 @@
 
 ## Seller Profiles
 
+### Become a Seller (Upgrade from Buyer)
+
+**Endpoint:** `GET /api/auth/become-seller/` or `POST /api/auth/become-seller/`
+
+**Authentication:** Required (Buyer role only)
+
+**Description:** Allows a buyer to upgrade their account to have seller capabilities. The user's role will be changed to `both` (buyer and seller), and a seller profile will be created.
+
+#### Check Eligibility (GET)
+
+**Endpoint:** `GET /api/auth/become-seller/`
+
+**Response (200 OK):**
+
+```json
+{
+  "can_become_seller": true,
+  "current_role": "buyer",
+  "has_seller_profile": false,
+  "message": "You can upgrade to seller"
+}
+```
+
+**Response if already a seller (200 OK):**
+
+```json
+{
+  "can_become_seller": false,
+  "current_role": "both",
+  "has_seller_profile": true,
+  "message": "You already have seller capabilities or a seller profile"
+}
+```
+
+#### Upgrade to Seller (POST)
+
+**Endpoint:** `POST /api/auth/become-seller/`
+
+**Request Body (all fields optional):**
+
+```json
+{
+  "brand_name": "My Artisan Shop",
+  "biography": "Passionate about traditional Pakistani crafts and textiles",
+  "business_address": "456 Market Street, Lahore, Punjab",
+  "website": "https://myartisanshop.com",
+  "social_media_links": {
+    "facebook": "https://facebook.com/myartisanshop",
+    "instagram": "https://instagram.com/myartisanshop",
+    "twitter": "https://twitter.com/myartisanshop"
+  }
+}
+```
+
+**Response (201 Created):**
+
+```json
+{
+  "message": "Successfully upgraded to seller",
+  "user": {
+    "id": 2,
+    "username": "buyer1",
+    "email": "buyer1@example.com",
+    "first_name": "John",
+    "last_name": "Doe",
+    "phone_number": "+923001234567",
+    "profile_picture": null,
+    "profile_picture_url": null,
+    "role": "both",
+    "is_blocked": false,
+    "failed_payment_count": 0,
+    "created_at": "2025-10-15T10:00:00Z"
+  },
+  "seller_profile": {
+    "id": 5,
+    "user": 2,
+    "user_username": "buyer1",
+    "user_email": "buyer1@example.com",
+    "brand_name": "My Artisan Shop",
+    "biography": "Passionate about traditional Pakistani crafts and textiles",
+    "business_address": "456 Market Street, Lahore, Punjab",
+    "website": "https://myartisanshop.com",
+    "social_media_links": {
+      "facebook": "https://facebook.com/myartisanshop",
+      "instagram": "https://instagram.com/myartisanshop",
+      "twitter": "https://twitter.com/myartisanshop"
+    },
+    "is_verified": false,
+    "average_rating": "0.00",
+    "total_feedbacks": 0,
+    "created_at": "2025-10-30T19:30:00Z",
+    "updated_at": "2025-10-30T19:30:00Z"
+  }
+}
+```
+
+**Error Responses:**
+
+```json
+{
+  "non_field_errors": ["You already have seller capabilities"]
+}
+```
+
+```json
+{
+  "non_field_errors": ["Seller profile already exists"]
+}
+```
+
+**Notes:**
+- All seller profile fields are optional. You can provide an empty JSON object `{}` to create a basic profile
+- After upgrading, a welcome notification is sent to the user
+- The user can immediately start creating product listings
+- Seller verification is initially set to `false` and requires admin approval
+
+---
+
 ### Get Seller Profile
 
 **Endpoint:** `GET /api/seller-profiles/{id}/`

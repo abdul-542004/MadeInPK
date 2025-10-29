@@ -670,3 +670,48 @@ class ProductReviewCreateSerializer(serializers.ModelSerializer):
         )
         return review
 
+
+# Become Seller Serializer
+class BecomeSellerSerializer(serializers.Serializer):
+    """Serializer for buyers to become sellers"""
+    brand_name = serializers.CharField(max_length=255, required=False, allow_blank=True)
+    biography = serializers.CharField(required=False, allow_blank=True)
+    business_address = serializers.CharField(required=False, allow_blank=True)
+    website = serializers.URLField(required=False, allow_blank=True)
+    social_media_links = serializers.JSONField(required=False, default=dict)
+    
+    def validate(self, data):
+        user = self.context['request'].user
+        
+        # Check if user already has seller capabilities
+        if user.role in ['seller', 'both']:
+            raise serializers.ValidationError("You already have seller capabilities")
+        
+        # Check if seller profile already exists
+        if hasattr(user, 'seller_profile'):
+            raise serializers.ValidationError("Seller profile already exists")
+        
+        return data
+    
+    def save(self):
+        user = self.context['request'].user
+        
+        # Update user role to 'both'
+        user.role = 'both'
+        user.save()
+        
+        # Create seller profile with provided data
+        seller_profile = SellerProfile.objects.create(
+            user=user,
+            brand_name=self.validated_data.get('brand_name', ''),
+            biography=self.validated_data.get('biography', ''),
+            business_address=self.validated_data.get('business_address', ''),
+            website=self.validated_data.get('website', ''),
+            social_media_links=self.validated_data.get('social_media_links', {})
+        )
+        
+        return {
+            'user': user,
+            'seller_profile': seller_profile
+        }
+
