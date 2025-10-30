@@ -32,8 +32,8 @@ else
     echo "✅ Redis is already running"
 fi
 
-# Navigate to Django project
-cd MadeInPK
+# Create logs directory if it doesn't exist
+mkdir -p logs
 
 echo "✅ Virtual environment activated"
 echo ""
@@ -42,13 +42,13 @@ echo ""
 
 # Start Celery Worker
 echo "📦 Starting Celery Worker..."
-celery -A MadeInPK worker --loglevel=info --logfile=../logs/celery_worker.log &
+celery -A MadeInPK worker --loglevel=info --logfile=logs/celery_worker.log &
 CELERY_WORKER_PID=$!
 echo "   PID: $CELERY_WORKER_PID"
 
 # Start Celery Beat
 echo "⏰ Starting Celery Beat..."
-celery -A MadeInPK beat --loglevel=info --logfile=../logs/celery_beat.log &
+celery -A MadeInPK beat --loglevel=info --logfile=logs/celery_beat.log &
 CELERY_BEAT_PID=$!
 echo "   PID: $CELERY_BEAT_PID"
 
