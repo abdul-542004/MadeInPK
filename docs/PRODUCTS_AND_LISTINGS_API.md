@@ -156,6 +156,10 @@ GET /api/products/?category=1&ordering=-created_at&page=1
         "is_verified": true,
         "average_rating": "4.70"
       },
+      "region": {
+        "id": 1,
+        "name": "Punjab"
+      },
       "created_at": "2025-10-20T10:00:00Z",
       "updated_at": "2025-10-20T10:00:00Z"
     },
@@ -185,6 +189,10 @@ GET /api/products/?category=1&ordering=-created_at&page=1
         "biography": "Family-owned textile business for 3 generations, specializing in handwoven fabrics.",
         "is_verified": true,
         "average_rating": "4.70"
+      },
+      "region": {
+        "id": 1,
+        "name": "Punjab"
       },
       "created_at": "2025-10-20T10:00:00Z",
       "updated_at": "2025-10-20T10:00:00Z"
@@ -230,6 +238,10 @@ GET /api/products/?category=1&ordering=-created_at&page=1
     "biography": "Family-owned textile business for 3 generations, specializing in handwoven fabrics.",
     "is_verified": true,
     "average_rating": "4.70"
+  },
+  "region": {
+    "id": 1,
+    "name": "Punjab"
   },
   "created_at": "2025-10-20T10:00:00Z",
   "updated_at": "2025-10-20T10:00:00Z"
@@ -313,6 +325,10 @@ const response = await axios.post(
     "biography": "Family-owned textile business for 3 generations, specializing in handwoven fabrics.",
     "is_verified": true,
     "average_rating": "4.70"
+  },
+  "region": {
+    "id": 1,
+    "name": "Punjab"
   },
   "created_at": "2025-10-27T19:00:00Z",
   "updated_at": "2025-10-27T19:00:00Z"
@@ -424,6 +440,10 @@ const response = await axios.post(
           "brand_name": "Hassan Textiles",
           "is_verified": true,
           "average_rating": "4.70"
+        },
+        "region": {
+          "id": 1,
+          "name": "Punjab"
         }
       },
       "starting_price": "2500.00",
@@ -685,6 +705,10 @@ const response = await axios.post(
           "brand_name": "Hassan Textiles",
           "is_verified": true,
           "average_rating": "4.70"
+        },
+        "region": {
+          "id": 1,
+          "name": "Punjab"
         }
       },
       "price": "1200.00",
@@ -721,6 +745,10 @@ const response = await axios.post(
           "brand_name": "Ayesha Crafts",
           "is_verified": true,
           "average_rating": "4.80"
+        },
+        "region": {
+          "id": 2,
+          "name": "Sindh"
         }
       },
       "price": "3200.00",

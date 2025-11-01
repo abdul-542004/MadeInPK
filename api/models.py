@@ -148,6 +148,17 @@ class Product(models.Model):
     
     def __str__(self):
         return self.name
+    
+    def get_region(self):
+        """Get the region (province) this product belongs to based on seller's default address"""
+        default_address = self.seller.addresses.filter(is_default=True).first()
+        if default_address:
+            return default_address.city.province
+        # If no default address, get any address
+        any_address = self.seller.addresses.first()
+        if any_address:
+            return any_address.city.province
+        return None
 
 
 class ProductImage(models.Model):

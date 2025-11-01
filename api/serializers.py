@@ -160,12 +160,13 @@ class ProductSerializer(serializers.ModelSerializer):
     average_rating = serializers.SerializerMethodField()
     total_reviews = serializers.SerializerMethodField()
     seller_profile = serializers.SerializerMethodField()
+    region = serializers.SerializerMethodField()
     
     class Meta:
         model = Product
         fields = ['id', 'seller', 'seller_username', 'category', 'category_name',
                   'name', 'description', 'condition', 'images', 'listing_type',
-                  'average_rating', 'total_reviews', 'seller_profile',
+                  'average_rating', 'total_reviews', 'seller_profile', 'region',
                   'created_at', 'updated_at']
         read_only_fields = ['seller', 'created_at', 'updated_at']
     
@@ -198,6 +199,16 @@ class ProductSerializer(serializers.ModelSerializer):
                 'biography': obj.seller.seller_profile.biography,
                 'is_verified': obj.seller.seller_profile.is_verified,
                 'average_rating': str(obj.seller.seller_profile.average_rating)
+            }
+        return None
+    
+    def get_region(self, obj):
+        """Get the region (province) this product belongs to based on seller's location"""
+        province = obj.get_region()
+        if province:
+            return {
+                'id': province.id,
+                'name': province.name
             }
         return None
 
