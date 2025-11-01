@@ -8,6 +8,7 @@ from django.shortcuts import get_object_or_404
 from django.db.models import Q, Avg
 from django.utils import timezone
 from decimal import Decimal
+from dateutil import parser
 import uuid
 
 from .models import (
@@ -381,6 +382,58 @@ class FixedPriceListingViewSet(viewsets.ModelViewSet):
         
         return queryset
     
+    def update(self, request, *args, **kwargs):
+        """Update listing - only seller can modify"""
+        listing = self.get_object()
+        if listing.product.seller != request.user:
+            return Response(
+                {'error': 'You can only update your own listings'}, 
+                status=status.HTTP_403_FORBIDDEN
+            )
+        return super().update(request, *args, **kwargs)
+    
+    def partial_update(self, request, *args, **kwargs):
+        """Partially update listing - only seller can modify discount fields"""
+        listing = self.get_object()
+        if listing.product.seller != request.user:
+            return Response(
+                {'error': 'You can only update your own listings'}, 
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        # Validate discount fields if being updated
+        discount_fields = ['discount_percentage', 'discount_start_date', 'discount_end_date']
+        discount_data = {k: v for k, v in request.data.items() if k in discount_fields}
+        
+        if discount_data:
+            # If updating any discount field, validate the complete discount setup
+            discount_percentage = discount_data.get('discount_percentage') or listing.discount_percentage
+            discount_start_date = discount_data.get('discount_start_date') or listing.discount_start_date
+            discount_end_date = discount_data.get('discount_end_date') or listing.discount_end_date
+            
+            if any([discount_percentage, discount_start_date, discount_end_date]):
+                if not all([discount_percentage, discount_start_date, discount_end_date]):
+                    return Response(
+                        {'error': 'If setting a discount, you must provide all discount fields: '
+                                 'discount_percentage, discount_start_date, and discount_end_date'},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+                
+                # Parse dates if they're strings
+                from dateutil import parser
+                if isinstance(discount_start_date, str):
+                    discount_start_date = parser.parse(discount_start_date)
+                if isinstance(discount_end_date, str):
+                    discount_end_date = parser.parse(discount_end_date)
+                
+                if discount_end_date <= discount_start_date:
+                    return Response(
+                        {'error': 'Discount end date must be after start date'},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+        
+        return super().partial_update(request, *args, **kwargs)
+    
     @action(detail=True, methods=['post'], permission_classes=[IsAuthenticated])
     def purchase(self, request, pk=None):
         """Purchase a fixed price listing"""
@@ -412,8 +465,9 @@ class FixedPriceListingViewSet(viewsets.ModelViewSet):
             return Response({'error': 'Invalid shipping address'}, 
                           status=status.HTTP_400_BAD_REQUEST)
         
-        # Create order
-        total_amount = listing.price * quantity
+        # Create order using current price (with discount if applicable)
+        current_price = listing.get_current_price()
+        total_amount = current_price * quantity
         platform_fee = total_amount * Decimal('0.02')
         seller_amount = total_amount - platform_fee
         
@@ -425,7 +479,7 @@ class FixedPriceListingViewSet(viewsets.ModelViewSet):
             order_type='fixed_price',
             fixed_price_listing=listing,
             quantity=quantity,
-            unit_price=listing.price,
+            unit_price=current_price,  # Use current price with discount
             total_amount=total_amount,
             platform_fee=platform_fee,
             seller_amount=seller_amount,

@@ -712,9 +712,15 @@ const response = await axios.post(
         }
       },
       "price": "1200.00",
+      "original_price": "1200.00",
+      "current_price": "1200.00",
       "quantity": 5,
       "status": "active",
       "featured": false,
+      "discount_percentage": null,
+      "discount_start_date": null,
+      "discount_end_date": null,
+      "has_active_discount": false,
       "created_at": "2025-10-20T10:00:00Z",
       "updated_at": "2025-10-20T10:00:00Z"
     },
@@ -752,11 +758,17 @@ const response = await axios.post(
         }
       },
       "price": "3200.00",
+      "original_price": "3200.00",
+      "current_price": "2560.00",
       "quantity": 3,
       "status": "active",
       "featured": false,
+      "discount_percentage": "20.00",
+      "discount_start_date": "2025-10-27T00:00:00Z",
+      "discount_end_date": "2025-11-10T23:59:59Z",
+      "has_active_discount": true,
       "created_at": "2025-10-20T10:00:00Z",
-      "updated_at": "2025-10-20T10:00:00Z"
+      "updated_at": "2025-10-27T10:00:00Z"
     }
   ]
 }
@@ -781,7 +793,10 @@ const response = await axios.post(
   "product_id": 12,
   "price": 1500.00,
   "quantity": 10,
-  "featured": false
+  "featured": false,
+  "discount_percentage": 15.00,
+  "discount_start_date": "2025-10-28T00:00:00Z",
+  "discount_end_date": "2025-11-15T23:59:59Z"
 }
 ```
 
@@ -793,6 +808,16 @@ const response = await axios.post(
 | price | decimal | Yes | Listing price (min 0.01) |
 | quantity | integer | Yes | Available quantity (min 1) |
 | featured | boolean | No | Mark as featured (default: false) |
+| discount_percentage | decimal | No | Discount percentage (0.01-99.99) |
+| discount_start_date | datetime | No | When discount starts (ISO 8601) |
+| discount_end_date | datetime | No | When discount ends (ISO 8601) |
+
+**Discount Rules:**
+- If setting a discount, all three discount fields must be provided
+- Discount percentage must be between 0.01 and 99.99
+- Discount start date cannot be in the past
+- Discount end date must be after start date
+- Only the product owner (seller) can set or modify discounts
 
 **Response (201 Created):**
 
@@ -805,11 +830,76 @@ const response = await axios.post(
     "seller_username": "seller1"
   },
   "price": "1500.00",
+  "original_price": "1500.00",
+  "current_price": "1275.00",
   "quantity": 10,
   "status": "active",
   "featured": false,
+  "discount_percentage": "15.00",
+  "discount_start_date": "2025-10-28T00:00:00Z",
+  "discount_end_date": "2025-11-15T23:59:59Z",
+  "has_active_discount": true,
   "created_at": "2025-10-27T19:00:00Z",
   "updated_at": "2025-10-27T19:00:00Z"
+}
+```
+
+### Update Fixed Price Listing
+
+**Endpoint:** `PATCH /api/listings/{id}/`
+
+**Authentication:** Required (Product owner/seller only)
+
+**Description:** Update listing details including discount settings. Only the seller who owns the product can update the listing.
+
+**Request Body (example - updating discount):**
+
+```json
+{
+  "discount_percentage": 25.00,
+  "discount_start_date": "2025-10-29T00:00:00Z",
+  "discount_end_date": "2025-11-20T23:59:59Z"
+}
+```
+
+**Response (200 OK):**
+
+```json
+{
+  "id": 8,
+  "product": {
+    "id": 12,
+    "name": "Traditional Ajrak Shawl",
+    "seller_username": "seller1"
+  },
+  "price": "1500.00",
+  "original_price": "1500.00",
+  "current_price": "1125.00",
+  "quantity": 10,
+  "status": "active",
+  "featured": false,
+  "discount_percentage": "25.00",
+  "discount_start_date": "2025-10-29T00:00:00Z",
+  "discount_end_date": "2025-11-20T23:59:59Z",
+  "has_active_discount": true,
+  "created_at": "2025-10-27T19:00:00Z",
+  "updated_at": "2025-10-27T20:00:00Z"
+}
+```
+
+**Error (403 Forbidden):**
+
+```json
+{
+  "error": "You can only update your own listings"
+}
+```
+
+**Error (400 Bad Request):**
+
+```json
+{
+  "error": "If setting a discount, you must provide all discount fields: discount_percentage, discount_start_date, and discount_end_date"
 }
 ```
 
@@ -818,6 +908,8 @@ const response = await axios.post(
 **Endpoint:** `POST /api/listings/{id}/purchase/`
 
 **Authentication:** Required
+
+**Description:** Purchase a fixed price listing. If the listing has an active discount, the discounted price will be used for the order.
 
 **Request Body:**
 
@@ -884,6 +976,55 @@ const response = await axios.post(
 ```json
 {
   "error": "You cannot purchase your own listing"
+}
+```
+
+---
+
+## Discount Feature for Fixed Price Listings
+
+Fixed price listings support time-limited discounts that sellers can set to offer temporary price reductions.
+
+### Key Features:
+
+- **Seller-Only Access**: Only the product owner (seller) can create or modify discounts
+- **Time-Limited**: Discounts have specific start and end dates
+- **Automatic Pricing**: The `current_price` field automatically reflects the discounted price when a discount is active
+- **Transparent**: Both `price` (original) and `current_price` (with discount) are shown to buyers
+- **Order Processing**: When a purchase is made during an active discount period, the discounted price is used
+
+### Discount Fields:
+
+- `discount_percentage`: Percentage off (0.01 to 99.99)
+- `discount_start_date`: When the discount becomes active
+- `discount_end_date`: When the discount expires
+- `has_active_discount`: Boolean indicating if discount is currently active
+- `original_price`: Always shows the base price
+- `current_price`: Shows discounted price when discount is active, otherwise shows original price
+
+### Example Scenarios:
+
+**No Discount:**
+```json
+{
+  "price": "1200.00",
+  "original_price": "1200.00",
+  "current_price": "1200.00",
+  "discount_percentage": null,
+  "has_active_discount": false
+}
+```
+
+**Active Discount (20% off):**
+```json
+{
+  "price": "3200.00",
+  "original_price": "3200.00",
+  "current_price": "2560.00",
+  "discount_percentage": "20.00",
+  "discount_start_date": "2025-10-27T00:00:00Z",
+  "discount_end_date": "2025-11-10T23:59:59Z",
+  "has_active_discount": true
 }
 ```
 

@@ -241,6 +241,18 @@ class FixedPriceListing(models.Model):
     quantity = models.IntegerField(validators=[MinValueValidator(1)])
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='active')
     featured = models.BooleanField(default=False)
+    
+    # Discount fields
+    discount_percentage = models.DecimalField(
+        max_digits=5, 
+        decimal_places=2, 
+        null=True, 
+        blank=True,
+        validators=[MinValueValidator(Decimal('0.01')), MaxValueValidator(Decimal('99.99'))]
+    )
+    discount_start_date = models.DateTimeField(null=True, blank=True)
+    discount_end_date = models.DateTimeField(null=True, blank=True)
+    
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     
@@ -249,6 +261,21 @@ class FixedPriceListing(models.Model):
     
     def __str__(self):
         return f"Fixed Price: {self.product.name} - ${self.price}"
+    
+    def get_current_price(self):
+        """Get the current price considering active discount"""
+        if self.has_active_discount():
+            discount_amount = self.price * (self.discount_percentage / Decimal('100'))
+            return self.price - discount_amount
+        return self.price
+    
+    def has_active_discount(self):
+        """Check if the listing has an active discount"""
+        if not self.discount_percentage or not self.discount_start_date or not self.discount_end_date:
+            return False
+        
+        now = timezone.now()
+        return self.discount_start_date <= now <= self.discount_end_date
     
     def reduce_quantity(self, amount):
         """Reduce quantity and update status if out of stock"""

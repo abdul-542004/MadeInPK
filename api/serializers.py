@@ -354,11 +354,24 @@ class BidCreateSerializer(serializers.ModelSerializer):
 # Fixed Price Listing Serializers
 class FixedPriceListingSerializer(serializers.ModelSerializer):
     product = ProductSerializer(read_only=True)
+    current_price = serializers.SerializerMethodField()
+    has_active_discount = serializers.SerializerMethodField()
+    original_price = serializers.DecimalField(source='price', max_digits=10, decimal_places=2, read_only=True)
     
     class Meta:
         model = FixedPriceListing
-        fields = ['id', 'product', 'price', 'quantity', 'status', 'featured', 'created_at', 'updated_at']
+        fields = ['id', 'product', 'price', 'original_price', 'current_price', 'quantity', 'status', 
+                  'featured', 'discount_percentage', 'discount_start_date', 'discount_end_date',
+                  'has_active_discount', 'created_at', 'updated_at']
         read_only_fields = ['status', 'created_at', 'updated_at']
+    
+    def get_current_price(self, obj):
+        """Get the current price after discount"""
+        return str(obj.get_current_price())
+    
+    def get_has_active_discount(self, obj):
+        """Check if discount is currently active"""
+        return obj.has_active_discount()
 
 
 class FixedPriceCreateSerializer(serializers.ModelSerializer):
@@ -366,7 +379,8 @@ class FixedPriceCreateSerializer(serializers.ModelSerializer):
     
     class Meta:
         model = FixedPriceListing
-        fields = ['product_id', 'price', 'quantity', 'featured']
+        fields = ['product_id', 'price', 'quantity', 'featured', 'discount_percentage', 
+                  'discount_start_date', 'discount_end_date']
     
     def validate_product_id(self, value):
         try:
@@ -378,6 +392,35 @@ class FixedPriceCreateSerializer(serializers.ModelSerializer):
             return value
         except Product.DoesNotExist:
             raise serializers.ValidationError("Product not found")
+    
+    def validate(self, data):
+        """Validate discount dates if discount is being set"""
+        discount_percentage = data.get('discount_percentage')
+        discount_start_date = data.get('discount_start_date')
+        discount_end_date = data.get('discount_end_date')
+        
+        # If any discount field is provided, all must be provided
+        if any([discount_percentage, discount_start_date, discount_end_date]):
+            if not all([discount_percentage, discount_start_date, discount_end_date]):
+                raise serializers.ValidationError(
+                    "If setting a discount, you must provide discount_percentage, "
+                    "discount_start_date, and discount_end_date"
+                )
+            
+            # Validate date range
+            if discount_end_date <= discount_start_date:
+                raise serializers.ValidationError(
+                    "Discount end date must be after start date"
+                )
+            
+            # Validate that start date is not in the past
+            from django.utils import timezone
+            if discount_start_date < timezone.now():
+                raise serializers.ValidationError(
+                    "Discount start date cannot be in the past"
+                )
+        
+        return data
     
     def create(self, validated_data):
         product_id = validated_data.pop('product_id')
