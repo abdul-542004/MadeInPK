@@ -18,6 +18,16 @@ class Command(BaseCommand):
     def handle(self, *args, **options):
         self.stdout.write('Populating database with sample data...')
 
+        # Check if data already exists
+        if Product.objects.exists():
+            self.stdout.write(
+                self.style.WARNING('⚠️  Database already contains products. Skipping population.')
+            )
+            self.stdout.write(
+                self.style.WARNING('   To repopulate, first delete existing data or use --force flag.')
+            )
+            return
+
         # Create provinces and cities
         self.create_locations()
 
