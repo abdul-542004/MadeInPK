@@ -97,7 +97,9 @@
 
 **Endpoint:** `GET /api/products/`
 
-**Authentication:** Not required
+**Authentication:** Not required (but recommended for wishlist status)
+
+**Note:** The `is_in_wishlist` field will be `false` for unauthenticated users. For authenticated users, it indicates whether the product is in their wishlist.
 
 **Query Parameters:**
 
@@ -160,6 +162,7 @@ GET /api/products/?category=1&ordering=-created_at&page=1
         "id": 1,
         "name": "Punjab"
       },
+      "is_in_wishlist": false,
       "created_at": "2025-10-20T10:00:00Z",
       "updated_at": "2025-10-20T10:00:00Z"
     },
@@ -194,6 +197,7 @@ GET /api/products/?category=1&ordering=-created_at&page=1
         "id": 1,
         "name": "Punjab"
       },
+      "is_in_wishlist": true,
       "created_at": "2025-10-20T10:00:00Z",
       "updated_at": "2025-10-20T10:00:00Z"
     }
@@ -243,6 +247,7 @@ GET /api/products/?category=1&ordering=-created_at&page=1
     "id": 1,
     "name": "Punjab"
   },
+  "is_in_wishlist": false,
   "created_at": "2025-10-20T10:00:00Z",
   "updated_at": "2025-10-20T10:00:00Z"
 }
@@ -330,6 +335,7 @@ const response = await axios.post(
     "id": 1,
     "name": "Punjab"
   },
+  "is_in_wishlist": false,
   "created_at": "2025-10-27T19:00:00Z",
   "updated_at": "2025-10-27T19:00:00Z"
 }
@@ -444,7 +450,8 @@ const response = await axios.post(
         "region": {
           "id": 1,
           "name": "Punjab"
-        }
+        },
+        "is_in_wishlist": false
       },
       "starting_price": "2500.00",
       "current_price": "2875.00",
@@ -709,7 +716,8 @@ const response = await axios.post(
         "region": {
           "id": 1,
           "name": "Punjab"
-        }
+        },
+        "is_in_wishlist": true
       },
       "price": "1200.00",
       "original_price": "1200.00",
@@ -755,7 +763,8 @@ const response = await axios.post(
         "region": {
           "id": 2,
           "name": "Sindh"
-        }
+        },
+        "is_in_wishlist": false
       },
       "price": "3200.00",
       "original_price": "3200.00",
@@ -1027,6 +1036,43 @@ Fixed price listings support time-limited discounts that sellers can set to offe
   "has_active_discount": true
 }
 ```
+
+---
+
+## Wishlist Integration
+
+All product responses (in both product listings and within auction/fixed price listings) include an `is_in_wishlist` field that helps the frontend determine whether to show a filled or empty heart icon.
+
+### How it Works:
+
+- **For Authenticated Users**: The field returns `true` if the product is in the user's wishlist, `false` otherwise
+- **For Unauthenticated Users**: The field always returns `false`
+
+### Usage for Frontend:
+
+```javascript
+// Example: Rendering wishlist heart icon
+if (product.is_in_wishlist) {
+  // Show filled heart ❤️
+  <HeartIconFilled />
+} else {
+  // Show empty heart 🤍
+  <HeartIconOutline />
+}
+```
+
+### Where This Field Appears:
+
+1. **Product List** - `GET /api/products/`
+2. **Product Detail** - `GET /api/products/{id}/`
+3. **Auction Listings** - `GET /api/auctions/` (nested in product object)
+4. **Auction Detail** - `GET /api/auctions/{id}/` (nested in product object)
+5. **Fixed Price Listings** - `GET /api/listings/` (nested in product object)
+6. **Fixed Price Detail** - `GET /api/listings/{id}/` (nested in product object)
+
+### Performance Note:
+
+The wishlist check is performed efficiently using a database query that only checks for existence, not retrieving full wishlist data.
 
 ---
 

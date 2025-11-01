@@ -161,13 +161,14 @@ class ProductSerializer(serializers.ModelSerializer):
     total_reviews = serializers.SerializerMethodField()
     seller_profile = serializers.SerializerMethodField()
     region = serializers.SerializerMethodField()
+    is_in_wishlist = serializers.SerializerMethodField()
     
     class Meta:
         model = Product
         fields = ['id', 'seller', 'seller_username', 'category', 'category_name',
                   'name', 'description', 'condition', 'images', 'listing_type',
                   'average_rating', 'total_reviews', 'seller_profile', 'region',
-                  'created_at', 'updated_at']
+                  'is_in_wishlist', 'created_at', 'updated_at']
         read_only_fields = ['seller', 'created_at', 'updated_at']
     
     def get_listing_type(self, obj):
@@ -211,6 +212,13 @@ class ProductSerializer(serializers.ModelSerializer):
                 'name': province.name
             }
         return None
+    
+    def get_is_in_wishlist(self, obj):
+        """Check if the product is in the current user's wishlist"""
+        request = self.context.get('request')
+        if request and request.user.is_authenticated:
+            return Wishlist.objects.filter(user=request.user, product=obj).exists()
+        return False
 
 
 class ProductCreateSerializer(serializers.ModelSerializer):
