@@ -42,6 +42,15 @@ def register(request):
     if serializer.is_valid():
         user = serializer.save()
         token, created = Token.objects.get_or_create(user=user)
+        
+        # Create welcome notification
+        Notification.objects.create(
+            user=user,
+            notification_type='general',
+            title='Welcome to MadeInPK!',
+            message='Thank you for registering. Start exploring our platform and discover amazing products from local sellers!'
+        )
+        
         return Response({
             'user': UserSerializer(user).data,
             'token': token.key
