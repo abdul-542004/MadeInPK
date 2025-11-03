@@ -2,8 +2,10 @@
 
 **Base WebSocket URL:** `ws://localhost:8000/ws/`
 
-> **📝 Last Updated:** October 29, 2025  
-> **✨ Recent Changes:** Enhanced initial connection response to include comprehensive product details, seller information with ratings, product images, start time, and total bid count.
+> **📝 Last Updated:** November 4, 2025  
+> **✨ Recent Changes:** 
+> - Added automatic email and in-app notification when users are outbid
+> - Enhanced initial connection response to include comprehensive product details, seller information with ratings, product images, start time, and total bid count
 
 ---
 
@@ -271,6 +273,42 @@ When any user successfully places a bid, ALL connected clients watching this auc
 
 **Use Case:** Update UI to show new highest bid and notify users they've been outbid.
 
+**📧 Automatic Notifications:**
+
+When a user is outbid, they automatically receive:
+
+1. **In-app notification** - Stored in the database and viewable in their notifications panel
+2. **Email notification** - Sent asynchronously via Celery task
+
+**Email Example:**
+```
+Subject: You have been outbid on Handwoven Pashmina Shawl
+
+Dear buyer1,
+
+You have been outbid on the auction for Handwoven Pashmina Shawl.
+
+New highest bid: Rs. 3000.00
+
+If you're still interested, you can place a higher bid to regain the lead.
+
+Log in to your MadeInPK account to view the auction and place a new bid.
+
+Thank you for using MadeInPK!
+```
+
+**In-app Notification:**
+```json
+{
+  "notification_type": "bid_outbid",
+  "title": "You have been outbid",
+  "message": "Someone placed a higher bid of Rs. 3000.00 on Handwoven Pashmina Shawl",
+  "auction": 1,
+  "is_read": false,
+  "created_at": "2025-11-04T18:45:00Z"
+}
+```
+
 ---
 
 ### 4. Error Response (Server → Client)
@@ -297,6 +335,8 @@ If a bid fails validation, only the user who attempted the bid receives an error
 | `"Bid must be higher than current price of X"` | Bid amount is too low |
 | `"You cannot bid on your own auction"` | Seller trying to bid on their own item |
 | `"Auction not found"` | Invalid auction ID |
+
+**Note:** When placing a bid that's higher than the current price, the previous highest bidder will automatically receive both an email and in-app notification informing them they've been outbid.
 
 ---
 
@@ -392,12 +432,16 @@ function useAuctionWebSocket(auctionId, token) {
             return {
               ...prev,
               current_price: data.data.current_price,
+              total_bids: (prev.total_bids || 0) + 1,
               latest_bids: [
                 data.data,
                 ...prev.latest_bids.slice(0, 4) // Keep only 5 most recent
               ]
             };
           });
+          
+          // Note: If you were the previous highest bidder and got outbid,
+          // you'll receive an email and in-app notification automatically
           break;
           
         case 'auction_ended':
@@ -647,6 +691,70 @@ wscat -c "ws://localhost:8000/ws/auction/1/?token=YOUR_TOKEN"
 
 # Send bid
 > {"type": "place_bid", "amount": 3000}
+```
+
+---
+
+## Notification System
+
+### Outbid Notifications
+
+When a user places a higher bid than you, the system automatically:
+
+1. **Creates an in-app notification** with type `bid_outbid`
+2. **Sends an email** to the outbid user
+3. **Updates the bid status** in the database
+
+**Notification Flow:**
+
+```
+User A has winning bid of Rs. 2,875
+           ↓
+User B places bid of Rs. 3,000
+           ↓
+System processes:
+  - Mark User A's bid as not winning
+  - Create User B's bid as winning
+  - Create notification for User A
+  - Send email to User A (async via Celery)
+           ↓
+User A receives:
+  - Real-time WebSocket update (if connected)
+  - In-app notification badge
+  - Email notification
+```
+
+### Accessing Notifications via API
+
+Users can retrieve their notifications using the REST API:
+
+```http
+GET /api/notifications/
+Authorization: Token YOUR_AUTH_TOKEN
+```
+
+**Response:**
+```json
+{
+  "count": 15,
+  "next": null,
+  "previous": null,
+  "results": [
+    {
+      "id": 42,
+      "notification_type": "bid_outbid",
+      "title": "You have been outbid",
+      "message": "Someone placed a higher bid of Rs. 3000.00 on Handwoven Pashmina Shawl",
+      "is_read": false,
+      "auction": {
+        "id": 1,
+        "product_name": "Handwoven Pashmina Shawl",
+        "current_price": "3000.00"
+      },
+      "created_at": "2025-11-04T18:45:00Z"
+    }
+  ]
+}
 ```
 
 ---

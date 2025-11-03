@@ -366,3 +366,42 @@ Thank you for using MadeInPK!
         )
     except Order.DoesNotExist:
         print(f"Order {order_id} not found")
+
+
+@shared_task
+def send_outbid_notification_email(user_id, auction_id, new_bid_amount, product_name):
+    """Send email notification when user is outbid"""
+    from .models import User, AuctionListing
+    
+    try:
+        user = User.objects.get(id=user_id)
+        auction = AuctionListing.objects.select_related('product').get(id=auction_id)
+        
+        subject = f'You have been outbid on {product_name}'
+        message = f"""
+Dear {user.username},
+
+You have been outbid on the auction for {product_name}.
+
+New highest bid: Rs. {new_bid_amount}
+
+If you're still interested, you can place a higher bid to regain the lead.
+
+Log in to your MadeInPK account to view the auction and place a new bid.
+
+Thank you for using MadeInPK!
+        """
+        
+        send_mail(
+            subject=subject,
+            message=message,
+            from_email=settings.DEFAULT_FROM_EMAIL,
+            recipient_list=[user.email],
+            fail_silently=False,
+        )
+    except User.DoesNotExist:
+        print(f"User {user_id} not found")
+    except AuctionListing.DoesNotExist:
+        print(f"Auction {auction_id} not found")
+    except Exception as e:
+        print(f"Failed to send outbid email: {str(e)}")

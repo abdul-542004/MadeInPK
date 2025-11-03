@@ -174,7 +174,7 @@ class AuctionConsumer(AsyncWebsocketConsumer):
     @database_sync_to_async
     def place_bid(self, auction_id, user, bid_amount):
         """Place a new bid"""
-        from .models import AuctionListing, Bid
+        from .models import AuctionListing, Bid, Notification
         from decimal import Decimal
         from django.utils import timezone
         
@@ -198,6 +198,12 @@ class AuctionConsumer(AsyncWebsocketConsumer):
             if auction.product.seller == user:
                 return {'success': False, 'error': 'You cannot bid on your own auction'}
             
+            # Get the previous winning bid before updating
+            previous_winning_bid = Bid.objects.filter(
+                auction=auction, 
+                is_winning=True
+            ).select_related('bidder').first()
+            
             # Mark previous winning bid as not winning
             Bid.objects.filter(auction=auction, is_winning=True).update(is_winning=False)
             
@@ -212,6 +218,26 @@ class AuctionConsumer(AsyncWebsocketConsumer):
             # Update auction current price
             auction.current_price = bid_amount
             auction.save()
+            
+            # Notify the previous highest bidder that they were outbid
+            if previous_winning_bid and previous_winning_bid.bidder != user:
+                # Create in-app notification
+                Notification.objects.create(
+                    user=previous_winning_bid.bidder,
+                    notification_type='bid_outbid',
+                    title='You have been outbid',
+                    message=f'Someone placed a higher bid of Rs. {bid_amount} on {auction.product.name}',
+                    auction=auction
+                )
+                
+                # Send email notification asynchronously
+                from .tasks import send_outbid_notification_email
+                send_outbid_notification_email.delay(
+                    user_id=previous_winning_bid.bidder.id,
+                    auction_id=auction.id,
+                    new_bid_amount=str(bid_amount),
+                    product_name=auction.product.name
+                )
             
             return {
                 'success': True,
