@@ -1,5 +1,7 @@
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
+from django.urls import path
+from django.shortcuts import redirect
 from .models import (
     User, Province, City, Address, Category, Product, ProductImage,
     AuctionListing, Bid, FixedPriceListing, Order, Payment,
@@ -8,7 +10,35 @@ from .models import (
 )
 
 
-@admin.register(User)
+# Custom Admin Site
+class MadeInPKAdminSite(admin.AdminSite):
+    site_header = "MadeInPK Administration"
+    site_title = "MadeInPK Admin Portal"
+    index_title = "Welcome to MadeInPK Administration"
+    
+    def get_urls(self):
+        urls = super().get_urls()
+        custom_urls = [
+            path('dashboard/', self.admin_view(self.dashboard_view), name='admin_dashboard'),
+        ]
+        return custom_urls + urls
+    
+    def dashboard_view(self, request):
+        from .admin_dashboard import admin_dashboard
+        return admin_dashboard(request)
+    
+    def index(self, request, extra_context=None):
+        # Redirect to custom dashboard instead of default admin index
+        return redirect('admin:admin_dashboard')
+
+
+# Replace default admin site
+admin_site = MadeInPKAdminSite(name='admin')
+admin.site = admin_site
+admin.sites.site = admin_site
+
+
+@admin.register(User, site=admin_site)
 class UserAdmin(BaseUserAdmin):
     list_display = ['username', 'email', 'role', 'is_blocked', 'failed_payment_count', 'created_at']
     list_filter = ['role', 'is_blocked', 'is_staff', 'is_superuser']
@@ -21,27 +51,27 @@ class UserAdmin(BaseUserAdmin):
     )
 
 
-@admin.register(Province)
+@admin.register(Province, site=admin_site)
 class ProvinceAdmin(admin.ModelAdmin):
     list_display = ['id', 'name']
     search_fields = ['name']
 
 
-@admin.register(City)
+@admin.register(City, site=admin_site)
 class CityAdmin(admin.ModelAdmin):
     list_display = ['id', 'name', 'province']
     list_filter = ['province']
     search_fields = ['name']
 
 
-@admin.register(Address)
+@admin.register(Address, site=admin_site)
 class AddressAdmin(admin.ModelAdmin):
     list_display = ['id', 'user', 'street_address', 'city', 'postal_code', 'is_default']
     list_filter = ['is_default', 'city']
     search_fields = ['user__username', 'street_address']
 
 
-@admin.register(Category)
+@admin.register(Category, site=admin_site)
 class CategoryAdmin(admin.ModelAdmin):
     list_display = ['id', 'name', 'parent']
     search_fields = ['name']
@@ -52,7 +82,7 @@ class ProductImageInline(admin.TabularInline):
     extra = 1
 
 
-@admin.register(Product)
+@admin.register(Product, site=admin_site)
 class ProductAdmin(admin.ModelAdmin):
     list_display = ['id', 'name', 'seller', 'category', 'condition', 'created_at']
     list_filter = ['condition', 'category', 'created_at']
@@ -60,7 +90,7 @@ class ProductAdmin(admin.ModelAdmin):
     inlines = [ProductImageInline]
 
 
-@admin.register(AuctionListing)
+@admin.register(AuctionListing, site=admin_site)
 class AuctionListingAdmin(admin.ModelAdmin):
     list_display = ['id', 'product', 'starting_price', 'current_price', 'status', 
                     'start_time', 'end_time', 'winner']
@@ -69,7 +99,7 @@ class AuctionListingAdmin(admin.ModelAdmin):
     readonly_fields = ['current_price', 'winner']
 
 
-@admin.register(Bid)
+@admin.register(Bid, site=admin_site)
 class BidAdmin(admin.ModelAdmin):
     list_display = ['id', 'auction', 'bidder', 'amount', 'bid_time', 'is_winning']
     list_filter = ['is_winning', 'bid_time']
@@ -77,14 +107,14 @@ class BidAdmin(admin.ModelAdmin):
     readonly_fields = ['bid_time']
 
 
-@admin.register(FixedPriceListing)
+@admin.register(FixedPriceListing, site=admin_site)
 class FixedPriceListingAdmin(admin.ModelAdmin):
     list_display = ['id', 'product', 'price', 'quantity', 'status', 'created_at']
     list_filter = ['status', 'created_at']
     search_fields = ['product__name']
 
 
-@admin.register(Order)
+@admin.register(Order, site=admin_site)
 class OrderAdmin(admin.ModelAdmin):
     list_display = ['order_number', 'buyer', 'seller', 'product', 'order_type', 
                     'total_amount', 'status', 'created_at']
@@ -94,7 +124,7 @@ class OrderAdmin(admin.ModelAdmin):
                       'paid_at', 'shipped_at', 'delivered_at']
 
 
-@admin.register(Payment)
+@admin.register(Payment, site=admin_site)
 class PaymentAdmin(admin.ModelAdmin):
     list_display = ['id', 'order', 'amount', 'status', 'created_at', 'completed_at']
     list_filter = ['status', 'created_at']
@@ -102,7 +132,7 @@ class PaymentAdmin(admin.ModelAdmin):
     readonly_fields = ['created_at', 'completed_at']
 
 
-@admin.register(Feedback)
+@admin.register(Feedback, site=admin_site)
 class FeedbackAdmin(admin.ModelAdmin):
     list_display = ['id', 'order', 'buyer', 'seller', 'seller_rating', 
                     'platform_rating', 'created_at']
@@ -111,14 +141,14 @@ class FeedbackAdmin(admin.ModelAdmin):
     readonly_fields = ['created_at']
 
 
-@admin.register(Conversation)
+@admin.register(Conversation, site=admin_site)
 class ConversationAdmin(admin.ModelAdmin):
     list_display = ['id', 'buyer', 'seller', 'order', 'created_at', 'updated_at']
     list_filter = ['created_at', 'updated_at']
     search_fields = ['buyer__username', 'seller__username']
 
 
-@admin.register(Message)
+@admin.register(Message, site=admin_site)
 class MessageAdmin(admin.ModelAdmin):
     list_display = ['id', 'conversation', 'sender', 'content_preview', 'is_read', 'created_at']
     list_filter = ['is_read', 'created_at']
@@ -129,7 +159,7 @@ class MessageAdmin(admin.ModelAdmin):
         return obj.content[:50] + '...' if len(obj.content) > 50 else obj.content
 
 
-@admin.register(Notification)
+@admin.register(Notification, site=admin_site)
 class NotificationAdmin(admin.ModelAdmin):
     list_display = ['id', 'user', 'notification_type', 'title', 'is_read', 
                     'is_sent_via_email', 'created_at']
@@ -138,7 +168,7 @@ class NotificationAdmin(admin.ModelAdmin):
     readonly_fields = ['created_at', 'email_sent_at']
 
 
-@admin.register(Complaint)
+@admin.register(Complaint, site=admin_site)
 class ComplaintAdmin(admin.ModelAdmin):
     list_display = ['complaint_number', 'user', 'category', 'subject', 'status', 
                     'created_at', 'resolved_at']
@@ -147,7 +177,7 @@ class ComplaintAdmin(admin.ModelAdmin):
     readonly_fields = ['complaint_number', 'created_at', 'updated_at']
 
 
-@admin.register(PaymentViolation)
+@admin.register(PaymentViolation, site=admin_site)
 class PaymentViolationAdmin(admin.ModelAdmin):
     list_display = ['id', 'user', 'order', 'payment_deadline', 'violation_date']
     list_filter = ['violation_date']
@@ -155,7 +185,7 @@ class PaymentViolationAdmin(admin.ModelAdmin):
     readonly_fields = ['violation_date']
 
 
-@admin.register(SellerProfile)
+@admin.register(SellerProfile, site=admin_site)
 class SellerProfileAdmin(admin.ModelAdmin):
     list_display = ['id', 'user', 'brand_name', 'is_verified', 'average_rating', 'total_feedbacks']
     list_filter = ['is_verified', 'created_at']
@@ -163,7 +193,7 @@ class SellerProfileAdmin(admin.ModelAdmin):
     readonly_fields = ['average_rating', 'total_feedbacks', 'created_at', 'updated_at']
 
 
-@admin.register(Wishlist)
+@admin.register(Wishlist, site=admin_site)
 class WishlistAdmin(admin.ModelAdmin):
     list_display = ['id', 'user', 'product', 'created_at']
     list_filter = ['created_at']
@@ -171,7 +201,7 @@ class WishlistAdmin(admin.ModelAdmin):
     readonly_fields = ['created_at']
 
 
-@admin.register(ProductReview)
+@admin.register(ProductReview, site=admin_site)
 class ProductReviewAdmin(admin.ModelAdmin):
     list_display = ['id', 'product', 'buyer', 'rating', 'is_verified_purchase', 'created_at']
     list_filter = ['rating', 'is_verified_purchase', 'created_at']
@@ -179,14 +209,14 @@ class ProductReviewAdmin(admin.ModelAdmin):
     readonly_fields = ['created_at', 'updated_at']
 
 
-@admin.register(Cart)
+@admin.register(Cart, site=admin_site)
 class CartAdmin(admin.ModelAdmin):
     list_display = ['id', 'user', 'created_at', 'updated_at']
     search_fields = ['user__username']
     readonly_fields = ['created_at', 'updated_at']
 
 
-@admin.register(CartItem)
+@admin.register(CartItem, site=admin_site)
 class CartItemAdmin(admin.ModelAdmin):
     list_display = ['id', 'cart', 'listing', 'quantity', 'added_at']
     list_filter = ['added_at']
@@ -194,7 +224,7 @@ class CartItemAdmin(admin.ModelAdmin):
     readonly_fields = ['added_at', 'updated_at']
 
 
-@admin.register(OrderItem)
+@admin.register(OrderItem, site=admin_site)
 class OrderItemAdmin(admin.ModelAdmin):
     list_display = ['id', 'order', 'product', 'quantity', 'unit_price', 'subtotal']
     list_filter = ['created_at']
@@ -202,7 +232,7 @@ class OrderItemAdmin(admin.ModelAdmin):
     readonly_fields = ['subtotal', 'created_at']
 
 
-@admin.register(SellerTransfer)
+@admin.register(SellerTransfer, site=admin_site)
 class SellerTransferAdmin(admin.ModelAdmin):
     list_display = ['id', 'payment', 'seller', 'amount', 'platform_fee', 'status', 'created_at']
     list_filter = ['status', 'created_at']
