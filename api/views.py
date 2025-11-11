@@ -14,7 +14,8 @@ import uuid
 from .models import (
     Province, City, Address, Category, Product, ProductImage,
     AuctionListing, Bid, FixedPriceListing, Order, Payment,
-    Feedback, Conversation, Message, Notification, Complaint, Wishlist, SellerProfile, ProductReview
+    Feedback, Conversation, Message, Notification, Complaint, Wishlist, SellerProfile, ProductReview,
+    Cart, CartItem, OrderItem, SellerTransfer
 )
 from .serializers import (
     UserRegistrationSerializer, UserSerializer, UserProfileSerializer,
@@ -27,7 +28,12 @@ from .serializers import (
     MessageSerializer, ConversationSerializer, NotificationSerializer,
     ComplaintSerializer, ComplaintCreateSerializer, WishlistSerializer, WishlistCreateSerializer, 
     SellerProfileSerializer, ProductReviewSerializer, ProductReviewCreateSerializer,
-    BecomeSellerSerializer
+    BecomeSellerSerializer, CartSerializer, CartItemSerializer, AddToCartSerializer,
+    UpdateCartItemSerializer, CartCheckoutSerializer, OrderItemSerializer, SellerTransferSerializer
+)
+from .stripe_utils import (
+    create_stripe_connect_account, create_account_link, get_account_status,
+    create_payment_intent_for_order
 )
 
 User = get_user_model()
@@ -914,3 +920,351 @@ class ProductReviewViewSet(viewsets.ModelViewSet):
         if instance.buyer != self.request.user:
             raise serializers.ValidationError("You can only delete your own reviews")
         instance.delete()
+
+
+# Shopping Cart ViewSet
+class CartViewSet(viewsets.ViewSet):
+    """Shopping cart operations"""
+    permission_classes = [IsAuthenticated]
+    
+    def list(self, request):
+        """Get user's cart"""
+        cart, created = Cart.objects.get_or_create(user=request.user)
+        serializer = CartSerializer(cart, context={'request': request})
+        return Response(serializer.data)
+    
+    @action(detail=False, methods=['post'])
+    def add_item(self, request):
+        """Add item to cart"""
+        cart, created = Cart.objects.get_or_create(user=request.user)
+        
+        serializer = AddToCartSerializer(data=request.data, context={'request': request})
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        
+        listing_id = serializer.validated_data['listing_id']
+        quantity = serializer.validated_data['quantity']
+        
+        listing = FixedPriceListing.objects.get(id=listing_id)
+        
+        # Check if item already in cart
+        cart_item, item_created = CartItem.objects.get_or_create(
+            cart=cart,
+            listing=listing,
+            defaults={'quantity': quantity}
+        )
+        
+        if not item_created:
+            # Update quantity if item already exists
+            new_quantity = cart_item.quantity + quantity
+            if new_quantity > listing.quantity:
+                return Response(
+                    {'error': f'Only {listing.quantity} items available in stock'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            cart_item.quantity = new_quantity
+            cart_item.save()
+        
+        return Response(
+            CartItemSerializer(cart_item, context={'request': request}).data,
+            status=status.HTTP_201_CREATED
+        )
+    
+    @action(detail=False, methods=['patch'], url_path='items/(?P<item_id>[^/.]+)')
+    def update_item(self, request, item_id=None):
+        """Update cart item quantity"""
+        try:
+            cart = Cart.objects.get(user=request.user)
+            cart_item = CartItem.objects.get(id=item_id, cart=cart)
+        except (Cart.DoesNotExist, CartItem.DoesNotExist):
+            return Response({'error': 'Cart item not found'}, status=status.HTTP_404_NOT_FOUND)
+        
+        serializer = UpdateCartItemSerializer(
+            data=request.data,
+            context={'request': request, 'cart_item': cart_item}
+        )
+        
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        
+        cart_item.quantity = serializer.validated_data['quantity']
+        cart_item.save()
+        
+        return Response(CartItemSerializer(cart_item, context={'request': request}).data)
+    
+    @action(detail=False, methods=['delete'], url_path='items/(?P<item_id>[^/.]+)')
+    def remove_item(self, request, item_id=None):
+        """Remove item from cart"""
+        try:
+            cart = Cart.objects.get(user=request.user)
+            cart_item = CartItem.objects.get(id=item_id, cart=cart)
+            cart_item.delete()
+            return Response({'message': 'Item removed from cart'})
+        except (Cart.DoesNotExist, CartItem.DoesNotExist):
+            return Response({'error': 'Cart item not found'}, status=status.HTTP_404_NOT_FOUND)
+    
+    @action(detail=False, methods=['post'])
+    def clear(self, request):
+        """Clear all items from cart"""
+        try:
+            cart = Cart.objects.get(user=request.user)
+            cart.items.all().delete()
+            return Response({'message': 'Cart cleared'})
+        except Cart.DoesNotExist:
+            return Response({'message': 'Cart is already empty'})
+    
+    @action(detail=False, methods=['post'])
+    def checkout(self, request):
+        """Checkout cart and create order"""
+        serializer = CartCheckoutSerializer(data=request.data, context={'request': request})
+        
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        
+        cart = request.user.cart
+        shipping_address_id = serializer.validated_data['shipping_address_id']
+        shipping_address = Address.objects.get(id=shipping_address_id)
+        
+        # Calculate total amounts
+        total_amount = cart.get_total_price()
+        platform_fee = total_amount * Decimal('0.02')
+        
+        # Create order
+        order = Order.objects.create(
+            order_number=f"CART-{uuid.uuid4().hex[:12].upper()}",
+            buyer=request.user,
+            order_type='cart',
+            total_amount=total_amount,
+            platform_fee=platform_fee,
+            shipping_address=shipping_address,
+            status='pending_payment',
+            payment_deadline=timezone.now() + timezone.timedelta(hours=24)
+        )
+        
+        # Create order items from cart items
+        for cart_item in cart.items.all():
+            OrderItem.objects.create(
+                order=order,
+                product=cart_item.listing.product,
+                listing=cart_item.listing,
+                quantity=cart_item.quantity,
+                unit_price=cart_item.listing.get_current_price(),
+            )
+            
+            # Reduce listing quantity
+            cart_item.listing.reduce_quantity(cart_item.quantity)
+        
+        # Create Stripe payment intent
+        try:
+            base_url = request.build_absolute_uri('/')[:-1]
+            payment_result = create_payment_intent_for_order(
+                order=order,
+                success_url=f"{base_url}/api/payments/success/?order_id={order.id}",
+                cancel_url=f"{base_url}/api/payments/cancel/?order_id={order.id}"
+            )
+            
+            order.payment_url = payment_result['checkout_url']
+            order.save()
+            
+        except Exception as e:
+            order.delete()  # Rollback order creation
+            return Response(
+                {'error': f'Payment creation failed: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+        
+        # Clear cart after successful order creation
+        cart.items.all().delete()
+        
+        # Create notification
+        Notification.objects.create(
+            user=request.user,
+            notification_type='payment_reminder',
+            title='Complete your payment',
+            message=f'Please complete payment for order {order.order_number}',
+            order=order
+        )
+        
+        return Response(OrderSerializer(order).data, status=status.HTTP_201_CREATED)
+
+
+# Stripe Connect ViewSet
+class StripeConnectViewSet(viewsets.ViewSet):
+    """Stripe Connect account management for sellers"""
+    permission_classes = [IsAuthenticated]
+    
+    @action(detail=False, methods=['post'])
+    def create_account(self, request):
+        """Create Stripe Connect account for seller"""
+        user = request.user
+        
+        # Check if user is a seller
+        if user.role not in ['seller', 'both']:
+            return Response(
+                {'error': 'Only sellers can create Stripe Connect accounts'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        # Check if already has account
+        if user.stripe_account_id:
+            return Response(
+                {'error': 'Stripe account already exists', 'account_id': user.stripe_account_id},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        try:
+            base_url = request.build_absolute_uri('/')[:-1]
+            return_url = f"{base_url}/api/stripe/connect/return/"
+            refresh_url = f"{base_url}/api/stripe/connect/refresh/"
+            
+            result = create_stripe_connect_account(user, return_url, refresh_url)
+            
+            return Response({
+                'message': 'Stripe Connect account created',
+                'account_id': result['account_id'],
+                'onboarding_url': result['account_link_url']
+            }, status=status.HTTP_201_CREATED)
+            
+        except Exception as e:
+            return Response(
+                {'error': str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+    
+    @action(detail=False, methods=['get'])
+    def account_status(self, request):
+        """Get Stripe Connect account status"""
+        user = request.user
+        
+        if not user.stripe_account_id:
+            return Response({'error': 'No Stripe account found'}, status=status.HTTP_404_NOT_FOUND)
+        
+        try:
+            status_info = get_account_status(user.stripe_account_id)
+            return Response(status_info)
+        except Exception as e:
+            return Response(
+                {'error': str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+    
+    @action(detail=False, methods=['post'])
+    def refresh_onboarding(self, request):
+        """Get new onboarding link for existing account"""
+        user = request.user
+        
+        if not user.stripe_account_id:
+            return Response({'error': 'No Stripe account found'}, status=status.HTTP_404_NOT_FOUND)
+        
+        try:
+            base_url = request.build_absolute_uri('/')[:-1]
+            return_url = f"{base_url}/api/stripe/connect/return/"
+            refresh_url = f"{base_url}/api/stripe/connect/refresh/"
+            
+            onboarding_url = create_account_link(user.stripe_account_id, return_url, refresh_url)
+            
+            return Response({'onboarding_url': onboarding_url})
+        except Exception as e:
+            return Response(
+                {'error': str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+    
+    @action(detail=False, methods=['get'])
+    def return_page(self, request):
+        """Return page after Stripe onboarding"""
+        return Response({
+            'message': 'Stripe account setup completed',
+            'status': 'success'
+        })
+    
+    @action(detail=False, methods=['get'])
+    def refresh_page(self, request):
+        """Refresh page during Stripe onboarding"""
+        return Response({
+            'message': 'Please complete your Stripe account setup',
+            'status': 'pending'
+        })
+
+
+# Stripe Webhook Handler
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def stripe_webhook(request):
+    """Handle Stripe webhook events"""
+    import stripe
+    from django.conf import settings
+    
+    payload = request.body
+    sig_header = request.META.get('HTTP_STRIPE_SIGNATURE')
+    
+    try:
+        event = stripe.Webhook.construct_event(
+            payload, sig_header, settings.STRIPE_WEBHOOK_SECRET
+        )
+    except ValueError:
+        return Response({'error': 'Invalid payload'}, status=status.HTTP_400_BAD_REQUEST)
+    except stripe.error.SignatureVerificationError:
+        return Response({'error': 'Invalid signature'}, status=status.HTTP_400_BAD_REQUEST)
+    
+    # Handle different event types
+    from .stripe_utils import handle_payment_intent_succeeded, handle_payment_intent_failed
+    
+    if event['type'] == 'payment_intent.succeeded':
+        payment_intent = event['data']['object']
+        handle_payment_intent_succeeded(payment_intent)
+    
+    elif event['type'] == 'payment_intent.payment_failed':
+        payment_intent = event['data']['object']
+        handle_payment_intent_failed(payment_intent)
+    
+    elif event['type'] == 'account.updated':
+        account = event['data']['object']
+        # Update seller account status if needed
+        try:
+            user = User.objects.get(stripe_account_id=account['id'])
+            # You can store additional account info here if needed
+        except User.DoesNotExist:
+            pass
+    
+    return Response({'status': 'success'})
+
+
+# Payment success and cancel pages
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def payment_success(request):
+    """Payment success page"""
+    order_id = request.query_params.get('order_id')
+    
+    if order_id:
+        try:
+            order = Order.objects.get(id=order_id, buyer=request.user)
+            return Response({
+                'message': 'Payment successful',
+                'order': OrderSerializer(order).data
+            })
+        except Order.DoesNotExist:
+            pass
+    
+    return Response({'message': 'Payment successful'})
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def payment_cancel(request):
+    """Payment cancelled page"""
+    order_id = request.query_params.get('order_id')
+    
+    if order_id:
+        try:
+            order = Order.objects.get(id=order_id, buyer=request.user)
+            return Response({
+                'message': 'Payment cancelled',
+                'order': OrderSerializer(order).data,
+                'payment_url': order.payment_url
+            })
+        except Order.DoesNotExist:
+            pass
+    
+    return Response({'message': 'Payment cancelled'})

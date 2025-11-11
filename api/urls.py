@@ -20,6 +20,8 @@ router.register(r'complaints', views.ComplaintViewSet, basename='complaint')
 router.register(r'wishlist', views.WishlistViewSet, basename='wishlist')
 router.register(r'seller-profiles', views.SellerProfileViewSet, basename='seller-profile')
 router.register(r'product-reviews', views.ProductReviewViewSet, basename='product-review')
+router.register(r'cart', views.CartViewSet, basename='cart')
+router.register(r'stripe/connect', views.StripeConnectViewSet, basename='stripe-connect')
 
 urlpatterns = [
     # Authentication endpoints
@@ -28,6 +30,13 @@ urlpatterns = [
     path('auth/logout/', views.logout, name='logout'),
     path('auth/profile/', views.profile, name='profile'),
     path('auth/become-seller/', views.become_seller, name='become-seller'),
+    
+    # Stripe webhook
+    path('stripe/webhook/', views.stripe_webhook, name='stripe-webhook'),
+    
+    # Payment pages
+    path('payments/success/', views.payment_success, name='payment-success'),
+    path('payments/cancel/', views.payment_cancel, name='payment-cancel'),
     
     # Router URLs
     path('', include(router.urls)),

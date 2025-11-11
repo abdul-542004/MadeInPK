@@ -1,0 +1,5 @@
+# Changes that need to be made to the existing application
+
+Currently, our system supports only ordering a single product from any one of the seller of the platform. But this approach is very simple and not so realistic. I want such that a buyer is able to order multiple products from multiple sellers at once. But this functionality is only for fixed-price products and not for auction products.Only one auction product can be bought at once. So, a buyer should be able to add multiple fixed-priced products to their cart from multiple sellers.
+
+I will be using Stripe Connect (Express) to receive money from the buyer, take 2% platform commission and then distribute the money to the respective sellers. Therefore, you will have to make necessary changes to the codebase to support Stripe Connect. Nothing is implemented with respect to payment gateway right now.

@@ -3,7 +3,8 @@ from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
 from .models import (
     User, Province, City, Address, Category, Product, ProductImage,
     AuctionListing, Bid, FixedPriceListing, Order, Payment,
-    Feedback, Conversation, Message, Notification, Complaint, PaymentViolation, SellerProfile, Wishlist, ProductReview
+    Feedback, Conversation, Message, Notification, Complaint, PaymentViolation, SellerProfile, Wishlist, ProductReview,
+    Cart, CartItem, OrderItem, SellerTransfer
 )
 
 
@@ -177,3 +178,33 @@ class ProductReviewAdmin(admin.ModelAdmin):
     search_fields = ['product__name', 'buyer__username', 'title', 'comment']
     readonly_fields = ['created_at', 'updated_at']
 
+
+@admin.register(Cart)
+class CartAdmin(admin.ModelAdmin):
+    list_display = ['id', 'user', 'created_at', 'updated_at']
+    search_fields = ['user__username']
+    readonly_fields = ['created_at', 'updated_at']
+
+
+@admin.register(CartItem)
+class CartItemAdmin(admin.ModelAdmin):
+    list_display = ['id', 'cart', 'listing', 'quantity', 'added_at']
+    list_filter = ['added_at']
+    search_fields = ['cart__user__username', 'listing__product__name']
+    readonly_fields = ['added_at', 'updated_at']
+
+
+@admin.register(OrderItem)
+class OrderItemAdmin(admin.ModelAdmin):
+    list_display = ['id', 'order', 'product', 'quantity', 'unit_price', 'subtotal']
+    list_filter = ['created_at']
+    search_fields = ['order__order_number', 'product__name']
+    readonly_fields = ['subtotal', 'created_at']
+
+
+@admin.register(SellerTransfer)
+class SellerTransferAdmin(admin.ModelAdmin):
+    list_display = ['id', 'payment', 'seller', 'amount', 'platform_fee', 'status', 'created_at']
+    list_filter = ['status', 'created_at']
+    search_fields = ['seller__username', 'stripe_transfer_id']
+    readonly_fields = ['created_at', 'updated_at', 'completed_at']

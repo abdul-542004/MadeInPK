@@ -291,6 +291,7 @@ class Order(models.Model):
     ORDER_TYPE_CHOICES = [
         ('auction', 'Auction'),
         ('fixed_price', 'Fixed Price'),
+        ('cart', 'Cart Checkout'),  # Multi-product order from cart
     ]
     
     STATUS_CHOICES = [
@@ -304,25 +305,28 @@ class Order(models.Model):
     
     order_number = models.CharField(max_length=50, unique=True)
     buyer = models.ForeignKey(User, on_delete=models.CASCADE, related_name='purchases')
-    seller = models.ForeignKey(User, on_delete=models.CASCADE, related_name='sales')
-    product = models.ForeignKey(Product, on_delete=models.PROTECT, related_name='orders')
     order_type = models.CharField(max_length=20, choices=ORDER_TYPE_CHOICES)
     
-    # Reference to auction or fixed price listing
+    # For single-product orders (auction or direct fixed-price purchase)
+    seller = models.ForeignKey(User, on_delete=models.CASCADE, related_name='sales', null=True, blank=True)
+    product = models.ForeignKey(Product, on_delete=models.PROTECT, related_name='orders', null=True, blank=True)
     auction = models.ForeignKey(AuctionListing, on_delete=models.SET_NULL, null=True, blank=True, related_name='orders')
     fixed_price_listing = models.ForeignKey(FixedPriceListing, on_delete=models.SET_NULL, null=True, blank=True, related_name='orders')
+    quantity = models.IntegerField(default=1, null=True, blank=True)
+    unit_price = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
     
-    quantity = models.IntegerField(default=1)
-    unit_price = models.DecimalField(max_digits=10, decimal_places=2)
+    # Total order amounts
     total_amount = models.DecimalField(max_digits=10, decimal_places=2)
     platform_fee = models.DecimalField(max_digits=10, decimal_places=2)  # 2% commission
-    seller_amount = models.DecimalField(max_digits=10, decimal_places=2)  # Amount to be transferred to seller
+    seller_amount = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)  # For single seller orders
     
     shipping_address = models.ForeignKey(Address, on_delete=models.PROTECT, related_name='orders')
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending_payment')
     
-    payment_url = models.URLField(max_length=500, blank=True)  # Stripe payment URL
-    payment_deadline = models.DateTimeField(null=True, blank=True)  # Deadline for payment
+    # Stripe payment fields
+    stripe_payment_intent_id = models.CharField(max_length=255, blank=True)
+    payment_url = models.URLField(max_length=500, blank=True)
+    payment_deadline = models.DateTimeField(null=True, blank=True)
     
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -340,7 +344,23 @@ class Order(models.Model):
     def calculate_amounts(self):
         """Calculate platform fee and seller amount"""
         self.platform_fee = self.total_amount * Decimal('0.02')
-        self.seller_amount = self.total_amount - self.platform_fee
+        if self.order_type in ['auction', 'fixed_price']:
+            # Single seller order
+            self.seller_amount = self.total_amount - self.platform_fee
+    
+    def is_multi_seller(self):
+        """Check if this is a multi-seller order (cart checkout)"""
+        return self.order_type == 'cart'
+    
+    def get_sellers(self):
+        """Get all sellers involved in this order"""
+        if self.is_multi_seller():
+            return User.objects.filter(
+                products__order_items__order=self
+            ).distinct()
+        elif self.seller:
+            return [self.seller]
+        return []
 
 
 # Payment Model
@@ -356,7 +376,6 @@ class Payment(models.Model):
     
     order = models.OneToOneField(Order, on_delete=models.CASCADE, related_name='payment')
     stripe_payment_intent_id = models.CharField(max_length=255, unique=True)
-    stripe_transfer_id = models.CharField(max_length=255, blank=True)  # Transfer to seller
     amount = models.DecimalField(max_digits=10, decimal_places=2)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
     payment_method = models.CharField(max_length=50, blank=True)
@@ -369,6 +388,34 @@ class Payment(models.Model):
     
     def __str__(self):
         return f"Payment for Order {self.order.order_number}: {self.status}"
+
+
+# Seller Transfer Model (for tracking transfers to sellers in Stripe Connect)
+class SellerTransfer(models.Model):
+    """Track individual transfers to sellers for multi-seller orders"""
+    STATUS_CHOICES = [
+        ('pending', 'Pending'),
+        ('processing', 'Processing'),
+        ('succeeded', 'Succeeded'),
+        ('failed', 'Failed'),
+    ]
+    
+    payment = models.ForeignKey(Payment, on_delete=models.CASCADE, related_name='seller_transfers')
+    seller = models.ForeignKey(User, on_delete=models.CASCADE, related_name='received_transfers')
+    amount = models.DecimalField(max_digits=10, decimal_places=2)
+    platform_fee = models.DecimalField(max_digits=10, decimal_places=2)
+    stripe_transfer_id = models.CharField(max_length=255, blank=True)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+    
+    class Meta:
+        db_table = 'seller_transfers'
+        ordering = ['-created_at']
+    
+    def __str__(self):
+        return f"Transfer to {self.seller.username}: ${self.amount} ({self.status})"
 
 
 # Feedback Model
@@ -587,4 +634,84 @@ class ProductReview(models.Model):
         super().save(*args, **kwargs)
 
 
-# add wishlist model
+# Shopping Cart Model
+class Cart(models.Model):
+    """Shopping cart for buyers to add multiple fixed-price products"""
+    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='cart')
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        db_table = 'carts'
+    
+    def __str__(self):
+        return f"Cart for {self.user.username}"
+    
+    def get_total_items(self):
+        """Get total number of items in cart"""
+        return sum(item.quantity for item in self.items.all())
+    
+    def get_total_price(self):
+        """Get total price of all items in cart"""
+        total = Decimal('0.00')
+        for item in self.items.all():
+            total += item.get_subtotal()
+        return total
+    
+    def get_sellers(self):
+        """Get unique list of sellers in this cart"""
+        return User.objects.filter(
+            products__fixed_price__cart_items__cart=self
+        ).distinct()
+
+
+class CartItem(models.Model):
+    """Individual item in a shopping cart"""
+    cart = models.ForeignKey(Cart, on_delete=models.CASCADE, related_name='items')
+    listing = models.ForeignKey(FixedPriceListing, on_delete=models.CASCADE, related_name='cart_items')
+    quantity = models.IntegerField(validators=[MinValueValidator(1)])
+    added_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        db_table = 'cart_items'
+        unique_together = ['cart', 'listing']  # One listing per cart
+        ordering = ['-added_at']
+    
+    def __str__(self):
+        return f"{self.quantity}x {self.listing.product.name} in {self.cart.user.username}'s cart"
+    
+    def get_subtotal(self):
+        """Get subtotal for this cart item (quantity * current price with discount)"""
+        return self.listing.get_current_price() * self.quantity
+    
+    def is_available(self):
+        """Check if the item is still available in requested quantity"""
+        return (
+            self.listing.status == 'active' and
+            self.listing.quantity >= self.quantity
+        )
+
+
+# Order Item Model (for orders with multiple products)
+class OrderItem(models.Model):
+    """Individual item within an order"""
+    order = models.ForeignKey(Order, on_delete=models.CASCADE, related_name='items')
+    product = models.ForeignKey(Product, on_delete=models.PROTECT, related_name='order_items')
+    listing = models.ForeignKey(FixedPriceListing, on_delete=models.SET_NULL, null=True, blank=True, related_name='order_items')
+    quantity = models.IntegerField(validators=[MinValueValidator(1)])
+    unit_price = models.DecimalField(max_digits=10, decimal_places=2)  # Price at time of purchase
+    subtotal = models.DecimalField(max_digits=10, decimal_places=2)  # quantity * unit_price
+    created_at = models.DateTimeField(auto_now_add=True)
+    
+    class Meta:
+        db_table = 'order_items'
+        ordering = ['created_at']
+    
+    def __str__(self):
+        return f"{self.quantity}x {self.product.name} in Order {self.order.order_number}"
+    
+    def save(self, *args, **kwargs):
+        # Auto-calculate subtotal
+        self.subtotal = self.unit_price * self.quantity
+        super().save(*args, **kwargs)

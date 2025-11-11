@@ -358,7 +358,10 @@ window.location.href = orderResponse.data.payment_url;
 ## Order Status Flow
 
 ```
-Fixed Price Purchase:
+Cart Checkout (Multi-Product):
+pending_payment → paid → (items shipped individually by sellers) → delivered
+
+Fixed Price Purchase (Single Product):
 pending_payment → paid → shipped → delivered
 
 Auction Win:
@@ -377,18 +380,63 @@ pending_payment → cancelled
 |--------|-------------|-------------------|
 | `pending_payment` | Awaiting payment | Buyer: Complete payment |
 | `payment_failed` | Payment failed or deadline passed | None |
-| `paid` | Payment successful | Seller: Mark as shipped |
-| `shipped` | Item shipped by seller | Buyer: Mark as delivered |
-| `delivered` | Item received by buyer | Buyer: Leave feedback |
+| `paid` | Payment successful | Seller(s): Mark as shipped |
+| `shipped` | Item(s) shipped by seller(s) | Buyer: Mark as delivered |
+| `delivered` | Item(s) received by buyer | Buyer: Leave feedback |
 | `cancelled` | Order cancelled | None |
+
+**Note for Cart Orders:** 
+- Multi-seller cart orders may have items shipped at different times by different sellers
+- Each seller manages shipping for their own items
+- Order is marked "delivered" when buyer confirms receipt of all items
 
 ---
 
 ## Order Types
 
-### Fixed Price Order
+### Cart Order (Multi-Product)
 
-Created when buyer purchases a fixed price listing.
+Created when buyer checks out their shopping cart with multiple products.
+
+**Order Number Format:** `CART-XXXXXXXXXXXX`
+
+**Example:**
+```json
+{
+  "order_number": "CART-A1B2C3D4E5F6",
+  "order_type": "cart",
+  "quantity": null,
+  "unit_price": null,
+  "total_amount": "4960.00",
+  "is_multi_seller": true,
+  "items": [
+    {
+      "id": 1,
+      "product": 2,
+      "product_name": "Embroidered Cotton Kurti",
+      "seller_id": 5,
+      "seller_username": "seller1",
+      "quantity": 2,
+      "unit_price": "1200.00",
+      "subtotal": "2400.00"
+    },
+    {
+      "id": 2,
+      "product": 4,
+      "product_name": "Brass Wall Hanging",
+      "seller_id": 6,
+      "seller_username": "seller2",
+      "quantity": 1,
+      "unit_price": "2560.00",
+      "subtotal": "2560.00"
+    }
+  ]
+}
+```
+
+### Fixed Price Order (Single Product)
+
+Created when buyer purchases a single fixed price listing directly (legacy/direct purchase).
 
 **Order Number Format:** `FXD-XXXXXXXXXXXX`
 
@@ -399,7 +447,8 @@ Created when buyer purchases a fixed price listing.
   "order_type": "fixed_price",
   "quantity": 2,
   "unit_price": "1200.00",
-  "total_amount": "2400.00"
+  "total_amount": "2400.00",
+  "is_multi_seller": false
 }
 ```
 
@@ -416,7 +465,8 @@ Created when auction ends and winner is determined.
   "order_type": "auction",
   "quantity": 1,
   "unit_price": "2875.00",
-  "total_amount": "2875.00"
+  "total_amount": "2875.00",
+  "is_multi_seller": false
 }
 ```
 

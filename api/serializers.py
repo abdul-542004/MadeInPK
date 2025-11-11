@@ -3,7 +3,8 @@ from django.contrib.auth import get_user_model
 from .models import (
     Province, City, Address, Category, Product, ProductImage,
     AuctionListing, Bid, FixedPriceListing, Order, Payment,
-    Feedback, Conversation, Message, Notification, Complaint, Wishlist, SellerProfile, ProductReview
+    Feedback, Conversation, Message, Notification, Complaint, Wishlist, SellerProfile, ProductReview,
+    Cart, CartItem, OrderItem, SellerTransfer
 )
 
 User = get_user_model()
@@ -441,26 +442,7 @@ class FixedPriceCreateSerializer(serializers.ModelSerializer):
         return listing
 
 
-# Order Serializers
-class OrderSerializer(serializers.ModelSerializer):
-    buyer_username = serializers.CharField(source='buyer.username', read_only=True)
-    seller_username = serializers.CharField(source='seller.username', read_only=True)
-    product_name = serializers.CharField(source='product.name', read_only=True)
-    shipping_address_detail = AddressSerializer(source='shipping_address', read_only=True)
-    
-    class Meta:
-        model = Order
-        fields = ['id', 'order_number', 'buyer', 'buyer_username', 'seller', 
-                  'seller_username', 'product', 'product_name', 'order_type',
-                  'quantity', 'unit_price', 'total_amount', 'platform_fee',
-                  'seller_amount', 'shipping_address', 'shipping_address_detail',
-                  'status', 'payment_url', 'payment_deadline', 'created_at',
-                  'paid_at', 'shipped_at', 'delivered_at']
-        read_only_fields = ['order_number', 'buyer', 'seller', 'platform_fee',
-                           'seller_amount', 'status', 'created_at', 'paid_at',
-                           'shipped_at', 'delivered_at']
-
-
+# Legacy Order Serializers (for single-product orders - kept for backward compatibility)
 class OrderCreateSerializer(serializers.ModelSerializer):
     listing_id = serializers.IntegerField(write_only=True)
     quantity = serializers.IntegerField(default=1)
@@ -776,4 +758,197 @@ class BecomeSellerSerializer(serializers.Serializer):
             'user': user,
             'seller_profile': seller_profile
         }
+
+
+# Cart Serializers
+class CartItemSerializer(serializers.ModelSerializer):
+    """Serializer for cart items with full product and listing details"""
+    product = ProductSerializer(source='listing.product', read_only=True)
+    listing_id = serializers.IntegerField(source='listing.id', read_only=True)
+    unit_price = serializers.SerializerMethodField()
+    subtotal = serializers.SerializerMethodField()
+    is_available = serializers.SerializerMethodField()
+    seller_id = serializers.IntegerField(source='listing.product.seller.id', read_only=True)
+    seller_username = serializers.CharField(source='listing.product.seller.username', read_only=True)
+    
+    class Meta:
+        model = CartItem
+        fields = ['id', 'listing_id', 'product', 'quantity', 'unit_price', 'subtotal',
+                  'is_available', 'seller_id', 'seller_username', 'added_at', 'updated_at']
+        read_only_fields = ['added_at', 'updated_at']
+    
+    def get_unit_price(self, obj):
+        """Get the current price with discount"""
+        return str(obj.listing.get_current_price())
+    
+    def get_subtotal(self, obj):
+        """Get the subtotal for this cart item"""
+        return str(obj.get_subtotal())
+    
+    def get_is_available(self, obj):
+        """Check if the item is still available"""
+        return obj.is_available()
+
+
+class AddToCartSerializer(serializers.Serializer):
+    """Serializer for adding items to cart"""
+    listing_id = serializers.IntegerField()
+    quantity = serializers.IntegerField(min_value=1)
+    
+    def validate_listing_id(self, value):
+        try:
+            listing = FixedPriceListing.objects.get(id=value)
+            if listing.status != 'active':
+                raise serializers.ValidationError("This listing is not active")
+            return value
+        except FixedPriceListing.DoesNotExist:
+            raise serializers.ValidationError("Listing not found")
+    
+    def validate(self, data):
+        listing = FixedPriceListing.objects.get(id=data['listing_id'])
+        
+        # Check if seller is trying to add their own product
+        user = self.context['request'].user
+        if listing.product.seller == user:
+            raise serializers.ValidationError("You cannot add your own products to cart")
+        
+        # Check quantity availability
+        if listing.quantity < data['quantity']:
+            raise serializers.ValidationError(
+                f"Only {listing.quantity} items available in stock"
+            )
+        
+        return data
+
+
+class UpdateCartItemSerializer(serializers.Serializer):
+    """Serializer for updating cart item quantity"""
+    quantity = serializers.IntegerField(min_value=1)
+    
+    def validate_quantity(self, value):
+        cart_item = self.context.get('cart_item')
+        if cart_item and cart_item.listing.quantity < value:
+            raise serializers.ValidationError(
+                f"Only {cart_item.listing.quantity} items available in stock"
+            )
+        return value
+
+
+class CartSerializer(serializers.ModelSerializer):
+    """Serializer for shopping cart with all items"""
+    items = CartItemSerializer(many=True, read_only=True)
+    total_items = serializers.SerializerMethodField()
+    total_price = serializers.SerializerMethodField()
+    sellers = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = Cart
+        fields = ['id', 'items', 'total_items', 'total_price', 'sellers', 
+                  'created_at', 'updated_at']
+        read_only_fields = ['created_at', 'updated_at']
+    
+    def get_total_items(self, obj):
+        """Get total number of items"""
+        return obj.get_total_items()
+    
+    def get_total_price(self, obj):
+        """Get total price"""
+        return str(obj.get_total_price())
+    
+    def get_sellers(self, obj):
+        """Get list of unique sellers in cart"""
+        sellers = obj.get_sellers()
+        return [{'id': s.id, 'username': s.username} for s in sellers]
+
+
+# Order Item Serializer
+class OrderItemSerializer(serializers.ModelSerializer):
+    """Serializer for individual items in an order"""
+    product_name = serializers.CharField(source='product.name', read_only=True)
+    seller_id = serializers.IntegerField(source='product.seller.id', read_only=True)
+    seller_username = serializers.CharField(source='product.seller.username', read_only=True)
+    
+    class Meta:
+        model = OrderItem
+        fields = ['id', 'product', 'product_name', 'seller_id', 'seller_username',
+                  'quantity', 'unit_price', 'subtotal', 'created_at']
+        read_only_fields = ['subtotal', 'created_at']
+
+
+# Updated Order Serializer to support multi-product orders
+class OrderSerializer(serializers.ModelSerializer):
+    buyer_username = serializers.CharField(source='buyer.username', read_only=True)
+    seller_username = serializers.CharField(source='seller.username', read_only=True)
+    product_name = serializers.CharField(source='product.name', read_only=True)
+    shipping_address_detail = AddressSerializer(source='shipping_address', read_only=True)
+    items = OrderItemSerializer(many=True, read_only=True)  # For cart orders
+    is_multi_seller = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = Order
+        fields = ['id', 'order_number', 'buyer', 'buyer_username', 'seller', 
+                  'seller_username', 'product', 'product_name', 'order_type',
+                  'quantity', 'unit_price', 'total_amount', 'platform_fee',
+                  'seller_amount', 'shipping_address', 'shipping_address_detail',
+                  'status', 'payment_url', 'payment_deadline', 'items',
+                  'is_multi_seller', 'stripe_payment_intent_id',
+                  'created_at', 'paid_at', 'shipped_at', 'delivered_at']
+        read_only_fields = ['order_number', 'buyer', 'seller', 'platform_fee',
+                           'seller_amount', 'status', 'stripe_payment_intent_id',
+                           'created_at', 'paid_at', 'shipped_at', 'delivered_at']
+    
+    def get_is_multi_seller(self, obj):
+        """Check if order involves multiple sellers"""
+        return obj.is_multi_seller()
+
+
+# Cart Checkout Serializer
+class CartCheckoutSerializer(serializers.Serializer):
+    """Serializer for checking out cart"""
+    shipping_address_id = serializers.IntegerField()
+    
+    def validate_shipping_address_id(self, value):
+        user = self.context['request'].user
+        try:
+            Address.objects.get(id=value, user=user)
+            return value
+        except Address.DoesNotExist:
+            raise serializers.ValidationError("Invalid shipping address")
+    
+    def validate(self, data):
+        user = self.context['request'].user
+        
+        # Check if user has a cart
+        if not hasattr(user, 'cart'):
+            raise serializers.ValidationError("Cart is empty")
+        
+        cart = user.cart
+        if not cart.items.exists():
+            raise serializers.ValidationError("Cart is empty")
+        
+        # Validate all items are still available
+        unavailable_items = []
+        for item in cart.items.all():
+            if not item.is_available():
+                unavailable_items.append(item.listing.product.name)
+        
+        if unavailable_items:
+            raise serializers.ValidationError(
+                f"The following items are no longer available: {', '.join(unavailable_items)}"
+            )
+        
+        return data
+
+
+# Seller Transfer Serializer
+class SellerTransferSerializer(serializers.ModelSerializer):
+    """Serializer for seller transfers"""
+    seller_username = serializers.CharField(source='seller.username', read_only=True)
+    
+    class Meta:
+        model = SellerTransfer
+        fields = ['id', 'seller', 'seller_username', 'amount', 'platform_fee',
+                  'stripe_transfer_id', 'status', 'created_at', 'completed_at']
+        read_only_fields = ['stripe_transfer_id', 'status', 'created_at', 'completed_at']
+
 
