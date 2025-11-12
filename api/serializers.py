@@ -515,7 +515,7 @@ class MessageSerializer(serializers.ModelSerializer):
 class ConversationSerializer(serializers.ModelSerializer):
     buyer_username = serializers.CharField(source='buyer.username', read_only=True)
     seller_username = serializers.CharField(source='seller.username', read_only=True)
-    order_number = serializers.CharField(source='order.order_number', read_only=True)
+    order_number = serializers.CharField(source='order.order_number', read_only=True, allow_null=True)
     latest_message = serializers.SerializerMethodField()
     unread_count = serializers.SerializerMethodField()
     
@@ -525,6 +525,9 @@ class ConversationSerializer(serializers.ModelSerializer):
                   'order', 'order_number', 'latest_message', 'unread_count',
                   'created_at', 'updated_at']
         read_only_fields = ['created_at', 'updated_at']
+        extra_kwargs = {
+            'order': {'required': False, 'allow_null': True}
+        }
     
     def get_latest_message(self, obj):
         message = obj.messages.last()
