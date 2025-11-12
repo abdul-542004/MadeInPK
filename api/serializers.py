@@ -515,19 +515,35 @@ class MessageSerializer(serializers.ModelSerializer):
 class ConversationSerializer(serializers.ModelSerializer):
     buyer_username = serializers.CharField(source='buyer.username', read_only=True)
     seller_username = serializers.CharField(source='seller.username', read_only=True)
-    order_number = serializers.CharField(source='order.order_number', read_only=True, allow_null=True)
+    product_name = serializers.CharField(source='product.name', read_only=True, allow_null=True)
+    product_image = serializers.SerializerMethodField()
     latest_message = serializers.SerializerMethodField()
     unread_count = serializers.SerializerMethodField()
     
     class Meta:
         model = Conversation
         fields = ['id', 'buyer', 'buyer_username', 'seller', 'seller_username',
-                  'order', 'order_number', 'latest_message', 'unread_count',
+                  'product', 'product_name', 'product_image', 'latest_message', 'unread_count',
                   'created_at', 'updated_at']
         read_only_fields = ['created_at', 'updated_at']
         extra_kwargs = {
-            'order': {'required': False, 'allow_null': True}
+            'product': {'required': False, 'allow_null': True}
         }
+    
+    def get_product_image(self, obj):
+        """Get primary product image URL"""
+        if not obj.product:
+            return None
+        
+        primary_image = obj.product.images.filter(is_primary=True).first()
+        if not primary_image:
+            primary_image = obj.product.images.first()
+        
+        if primary_image and primary_image.image:
+            request = self.context.get('request')
+            if request:
+                return request.build_absolute_uri(primary_image.image.url)
+        return None
     
     def get_latest_message(self, obj):
         message = obj.messages.last()

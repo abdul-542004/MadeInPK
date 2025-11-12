@@ -455,19 +455,20 @@ class Feedback(models.Model):
 
 # Message Model (for buyer-seller communication)
 class Conversation(models.Model):
-    """Conversation between buyer and seller"""
+    """Conversation between buyer and seller about a specific product"""
     buyer = models.ForeignKey(User, on_delete=models.CASCADE, related_name='conversations_as_buyer')
     seller = models.ForeignKey(User, on_delete=models.CASCADE, related_name='conversations_as_seller')
-    order = models.ForeignKey(Order, on_delete=models.CASCADE, related_name='conversations', null=True, blank=True)
+    product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name='conversations', null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     
     class Meta:
         db_table = 'conversations'
-        unique_together = ['buyer', 'seller', 'order']
+        unique_together = ['buyer', 'seller', 'product']
     
     def __str__(self):
-        return f"Conversation: {self.buyer.username} - {self.seller.username}"
+        product_name = self.product.name if self.product else 'General Inquiry'
+        return f"Conversation: {self.buyer.username} - {self.seller.username} about {product_name}"
 
 
 class Message(models.Model):

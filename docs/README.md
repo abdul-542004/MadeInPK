@@ -83,7 +83,7 @@ Order management and payment processing.
 ---
 
 ### 5. [Additional Features API](./ADDITIONAL_FEATURES_API.md)
-Supporting features like wishlist, messaging, notifications, etc.
+Supporting features like wishlist, notifications, seller profiles, etc.
 
 **Endpoints:**
 - `/api/provinces/` & `/api/cities/` - Location data
@@ -91,10 +91,28 @@ Supporting features like wishlist, messaging, notifications, etc.
 - `/api/wishlist/` - Wishlist functionality
 - `/api/feedbacks/` - Order feedback
 - `/api/product-reviews/` - Product reviews
-- `/api/conversations/` - Messaging
 - `/api/notifications/` - Notifications
 - `/api/seller-profiles/` - Seller profiles
 - `/api/complaints/` - Complaint system
+
+---
+
+### 6. [Messaging API](./MESSAGING_API.md)
+Comprehensive buyer-seller messaging system with product context.
+
+**Endpoints:**
+- `/api/conversations/` - Conversation management
+- `/api/conversations/{id}/messages/` - Message history
+- `/api/conversations/{id}/send_message/` - Send messages
+
+**Topics Covered:**
+- Product-specific conversations
+- Pre-purchase inquiries
+- Post-purchase support
+- Real-time messaging with WebSocket
+- Read status tracking
+- Notification integration
+- Complete examples and use cases
 
 ---
 

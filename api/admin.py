@@ -143,9 +143,9 @@ class FeedbackAdmin(admin.ModelAdmin):
 
 @admin.register(Conversation, site=admin_site)
 class ConversationAdmin(admin.ModelAdmin):
-    list_display = ['id', 'buyer', 'seller', 'order', 'created_at', 'updated_at']
+    list_display = ['id', 'buyer', 'seller', 'product', 'created_at', 'updated_at']
     list_filter = ['created_at', 'updated_at']
-    search_fields = ['buyer__username', 'seller__username']
+    search_fields = ['buyer__username', 'seller__username', 'product__name']
 
 
 @admin.register(Message, site=admin_site)

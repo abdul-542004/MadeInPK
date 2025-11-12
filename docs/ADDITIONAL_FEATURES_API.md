@@ -530,107 +530,25 @@
 
 ## Messaging
 
-### List Conversations
+**For complete and comprehensive messaging documentation, see [MESSAGING_API.md](./MESSAGING_API.md)**
 
-**Endpoint:** `GET /api/conversations/`
+The messaging system enables buyer-seller communication with product context. Key features include:
 
-**Authentication:** Required
+- Product-specific conversations for contextual communication
+- Pre-purchase inquiries and post-purchase support
+- Real-time messaging with read status tracking
+- Automatic notifications for new messages
+- Optional product linking (conversations can exist without products)
 
-**Response (200 OK):**
+### Quick Reference
 
-```json
-{
-  "count": 2,
-  "results": [
-    {
-      "id": 1,
-      "buyer": 1,
-      "buyer_username": "buyer1",
-      "seller": 5,
-      "seller_username": "seller1",
-      "order": 1,
-      "order_number": "FXD-A1B2C3D4E5F6",
-      "latest_message": {
-        "id": 5,
-        "sender": 5,
-        "sender_username": "seller1",
-        "content": "I will ship it tomorrow morning",
-        "is_read": false,
-        "created_at": "2025-10-27T18:30:00Z"
-      },
-      "unread_count": 1,
-      "created_at": "2025-10-27T18:00:00Z",
-      "updated_at": "2025-10-27T18:30:00Z"
-    }
-  ]
-}
-```
+**List Conversations:** `GET /api/conversations/`
 
-### Get Conversation Messages
+**Get Messages:** `GET /api/conversations/{id}/messages/`
 
-**Endpoint:** `GET /api/conversations/{id}/messages/`
+**Send Message:** `POST /api/conversations/{id}/send_message/`
 
-**Authentication:** Required (Participant only)
-
-**Response (200 OK):**
-
-```json
-[
-  {
-    "id": 1,
-    "sender": 1,
-    "sender_username": "buyer1",
-    "content": "When will you ship the item?",
-    "is_read": true,
-    "created_at": "2025-10-27T18:00:00Z"
-  },
-  {
-    "id": 2,
-    "sender": 5,
-    "sender_username": "seller1",
-    "content": "I will ship it tomorrow morning",
-    "is_read": true,
-    "created_at": "2025-10-27T18:30:00Z"
-  }
-]
-```
-
-**Note:** Messages are automatically marked as read when retrieved.
-
-### Send Message
-
-**Endpoint:** `POST /api/conversations/{id}/send_message/`
-
-**Authentication:** Required (Participant only)
-
-**Request Body:**
-
-```json
-{
-  "content": "Thank you! Looking forward to receiving it."
-}
-```
-
-**Response (201 Created):**
-
-```json
-{
-  "id": 3,
-  "sender": 1,
-  "sender_username": "buyer1",
-  "content": "Thank you! Looking forward to receiving it.",
-  "is_read": false,
-  "created_at": "2025-10-27T18:45:00Z"
-}
-```
-
-**Error (403 Forbidden):**
-
-```json
-{
-  "error": "You are not part of this conversation"
-}
-```
+For detailed examples, request/response formats, and advanced usage patterns, please refer to the [dedicated messaging documentation](./MESSAGING_API.md).
 
 ---
 
