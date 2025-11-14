@@ -971,3 +971,34 @@ class SellerTransferSerializer(serializers.ModelSerializer):
         read_only_fields = ['stripe_transfer_id', 'status', 'created_at', 'completed_at']
 
 
+# Seller Earnings Serializers
+class SellerEarningsSerializer(serializers.Serializer):
+    """Serializer for seller earnings overview"""
+    current_month = serializers.DecimalField(max_digits=10, decimal_places=2)
+    last_month = serializers.DecimalField(max_digits=10, decimal_places=2)
+    total_earnings = serializers.DecimalField(max_digits=10, decimal_places=2)
+    pending_payouts = serializers.DecimalField(max_digits=10, decimal_places=2)
+    earnings_by_month = serializers.ListField(child=serializers.DictField())
+    earnings_by_week = serializers.ListField(child=serializers.DictField())
+    earnings_by_quarter = serializers.ListField(child=serializers.DictField())
+    earnings_by_year = serializers.ListField(child=serializers.DictField())
+
+
+class SellerTransactionSerializer(serializers.Serializer):
+    """Serializer for seller transactions"""
+    id = serializers.CharField()
+    description = serializers.CharField()
+    date = serializers.DateTimeField()
+    amount = serializers.CharField()
+    status = serializers.CharField()
+    status_color = serializers.CharField()
+    order_id = serializers.IntegerField(required=False, allow_null=True)
+
+
+class ProductPerformanceSerializer(serializers.Serializer):
+    """Serializer for product performance"""
+    name = serializers.CharField()
+    sales = serializers.IntegerField()
+    revenue = serializers.DecimalField(max_digits=10, decimal_places=2)
+
+

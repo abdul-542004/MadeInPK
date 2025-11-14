@@ -29,7 +29,8 @@ from .serializers import (
     ComplaintSerializer, ComplaintCreateSerializer, WishlistSerializer, WishlistCreateSerializer, 
     SellerProfileSerializer, ProductReviewSerializer, ProductReviewCreateSerializer,
     BecomeSellerSerializer, CartSerializer, CartItemSerializer, AddToCartSerializer,
-    UpdateCartItemSerializer, CartCheckoutSerializer, OrderItemSerializer, SellerTransferSerializer
+    UpdateCartItemSerializer, CartCheckoutSerializer, OrderItemSerializer, SellerTransferSerializer,
+    SellerEarningsSerializer, SellerTransactionSerializer, ProductPerformanceSerializer
 )
 from .stripe_utils import (
     create_stripe_connect_account, create_account_link, get_account_status,
@@ -1316,7 +1317,7 @@ def seller_statistics(request):
     # Check if user is a seller
     if user.role not in ['seller', 'both']:
         return Response(
-            {'error': 'You must be a seller to access statistics'},
+            {'error': 'Only sellers can access this endpoint'},
             status=status.HTTP_403_FORBIDDEN
         )
     
@@ -1355,4 +1356,380 @@ def seller_statistics(request):
         'total_revenue': str(total_revenue),
         'total_products': total_products,
         'active_auctions': active_auctions,
+    })
+
+
+# Seller Earnings Endpoint
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def seller_earnings(request):
+    """Get detailed seller earnings data for dashboard"""
+    from django.db.models import Sum, Count, Q
+    from datetime import datetime, timedelta
+    from decimal import Decimal
+    import calendar
+    
+    user = request.user
+    
+    # Check if user is a seller
+    if user.role not in ['seller', 'both']:
+        return Response(
+            {'error': 'Only sellers can access this endpoint'},
+            status=status.HTTP_403_FORBIDDEN
+        )
+    
+    now = timezone.now()
+    
+    # Get all seller orders (including multi-seller orders via OrderItems)
+    # For single-seller orders
+    single_seller_orders = Order.objects.filter(
+        seller=user,
+        status__in=['paid', 'shipped', 'delivered']
+    )
+    
+    # For multi-seller orders (cart orders)
+    multi_seller_orders = OrderItem.objects.filter(
+        product__seller=user,
+        order__status__in=['paid', 'shipped', 'delivered']
+    )
+    
+    # Calculate current month earnings
+    current_month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    current_month_single = single_seller_orders.filter(
+        paid_at__gte=current_month_start
+    ).aggregate(total=Sum('seller_amount'))['total'] or Decimal('0.00')
+    
+    current_month_multi = multi_seller_orders.filter(
+        order__paid_at__gte=current_month_start
+    ).aggregate(total=Sum('subtotal'))['total'] or Decimal('0.00')
+    # Apply platform fee reduction (2%)
+    current_month_multi = current_month_multi * Decimal('0.98')
+    
+    current_month_earnings = current_month_single + current_month_multi
+    
+    # Calculate last month earnings
+    last_month_start = (current_month_start - timedelta(days=1)).replace(day=1)
+    last_month_end = current_month_start
+    
+    last_month_single = single_seller_orders.filter(
+        paid_at__gte=last_month_start,
+        paid_at__lt=last_month_end
+    ).aggregate(total=Sum('seller_amount'))['total'] or Decimal('0.00')
+    
+    last_month_multi = multi_seller_orders.filter(
+        order__paid_at__gte=last_month_start,
+        order__paid_at__lt=last_month_end
+    ).aggregate(total=Sum('subtotal'))['total'] or Decimal('0.00')
+    last_month_multi = last_month_multi * Decimal('0.98')
+    
+    last_month_earnings = last_month_single + last_month_multi
+    
+    # Calculate total earnings
+    total_single = single_seller_orders.aggregate(total=Sum('seller_amount'))['total'] or Decimal('0.00')
+    total_multi = multi_seller_orders.aggregate(total=Sum('subtotal'))['total'] or Decimal('0.00')
+    total_multi = total_multi * Decimal('0.98')
+    total_earnings = total_single + total_multi
+    
+    # Calculate pending payouts (paid but not yet delivered)
+    pending_single = single_seller_orders.filter(
+        status__in=['paid', 'shipped']
+    ).aggregate(total=Sum('seller_amount'))['total'] or Decimal('0.00')
+    
+    pending_multi = multi_seller_orders.filter(
+        order__status__in=['paid', 'shipped']
+    ).aggregate(total=Sum('subtotal'))['total'] or Decimal('0.00')
+    pending_multi = pending_multi * Decimal('0.98')
+    
+    pending_payouts = pending_single + pending_multi
+    
+    # Earnings by month (last 12 months)
+    earnings_by_month = []
+    for i in range(11, -1, -1):
+        month_start = (now.replace(day=1) - timedelta(days=30*i)).replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        month_end = (month_start + timedelta(days=32)).replace(day=1)
+        
+        month_single = single_seller_orders.filter(
+            paid_at__gte=month_start,
+            paid_at__lt=month_end
+        ).aggregate(total=Sum('seller_amount'))['total'] or Decimal('0.00')
+        
+        month_multi = multi_seller_orders.filter(
+            order__paid_at__gte=month_start,
+            order__paid_at__lt=month_end
+        ).aggregate(total=Sum('subtotal'))['total'] or Decimal('0.00')
+        month_multi = month_multi * Decimal('0.98')
+        
+        earnings_by_month.append({
+            'month': month_start.strftime('%b %Y'),
+            'amount': str(month_single + month_multi),
+            'earnings': float(month_single + month_multi)
+        })
+    
+    # Earnings by week (last 4 weeks)
+    earnings_by_week = []
+    for i in range(3, -1, -1):
+        week_start = now - timedelta(days=7*(i+1))
+        week_end = now - timedelta(days=7*i)
+        
+        week_single = single_seller_orders.filter(
+            paid_at__gte=week_start,
+            paid_at__lt=week_end
+        ).aggregate(total=Sum('seller_amount'))['total'] or Decimal('0.00')
+        
+        week_multi = multi_seller_orders.filter(
+            order__paid_at__gte=week_start,
+            order__paid_at__lt=week_end
+        ).aggregate(total=Sum('subtotal'))['total'] or Decimal('0.00')
+        week_multi = week_multi * Decimal('0.98')
+        
+        earnings_by_week.append({
+            'name': f'Week {4-i}',
+            'amount': str(week_single + week_multi),
+            'earnings': float(week_single + week_multi)
+        })
+    
+    # Earnings by quarter (last 4 quarters)
+    earnings_by_quarter = []
+    for i in range(3, -1, -1):
+        quarter_start = now - timedelta(days=90*(i+1))
+        quarter_end = now - timedelta(days=90*i)
+        
+        quarter_single = single_seller_orders.filter(
+            paid_at__gte=quarter_start,
+            paid_at__lt=quarter_end
+        ).aggregate(total=Sum('seller_amount'))['total'] or Decimal('0.00')
+        
+        quarter_multi = multi_seller_orders.filter(
+            order__paid_at__gte=quarter_start,
+            order__paid_at__lt=quarter_end
+        ).aggregate(total=Sum('subtotal'))['total'] or Decimal('0.00')
+        quarter_multi = quarter_multi * Decimal('0.98')
+        
+        earnings_by_quarter.append({
+            'name': quarter_start.strftime('%b'),
+            'amount': str(quarter_single + quarter_multi),
+            'earnings': float(quarter_single + quarter_multi)
+        })
+    
+    # Earnings by year (last 5 years)
+    earnings_by_year = []
+    for i in range(4, -1, -1):
+        year_start = now.replace(month=1, day=1) - timedelta(days=365*i)
+        year_end = year_start.replace(year=year_start.year + 1)
+        
+        year_single = single_seller_orders.filter(
+            paid_at__gte=year_start,
+            paid_at__lt=year_end
+        ).aggregate(total=Sum('seller_amount'))['total'] or Decimal('0.00')
+        
+        year_multi = multi_seller_orders.filter(
+            order__paid_at__gte=year_start,
+            order__paid_at__lt=year_end
+        ).aggregate(total=Sum('subtotal'))['total'] or Decimal('0.00')
+        year_multi = year_multi * Decimal('0.98')
+        
+        earnings_by_year.append({
+            'name': str(year_start.year),
+            'amount': str(year_single + year_multi),
+            'earnings': float(year_single + year_multi)
+        })
+    
+    return Response({
+        'current_month': str(current_month_earnings),
+        'last_month': str(last_month_earnings),
+        'total_earnings': str(total_earnings),
+        'pending_payouts': str(pending_payouts),
+        'earnings_by_month': earnings_by_month,
+        'earnings_by_week': earnings_by_week,
+        'earnings_by_quarter': earnings_by_quarter,
+        'earnings_by_year': earnings_by_year,
+    })
+
+
+# Seller Transactions Endpoint
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def seller_transactions(request):
+    """Get seller transaction history"""
+    from django.db.models import Q
+    
+    user = request.user
+    
+    # Check if user is a seller
+    if user.role not in ['seller', 'both']:
+        return Response(
+            {'error': 'Only sellers can access this endpoint'},
+            status=status.HTTP_403_FORBIDDEN
+        )
+    
+    # Get pagination parameters
+    limit = int(request.query_params.get('limit', 50))
+    offset = int(request.query_params.get('offset', 0))
+    
+    transactions = []
+    
+    # Get single-seller orders
+    single_orders = Order.objects.filter(
+        seller=user
+    ).select_related('product').order_by('-created_at')
+    
+    for order in single_orders:
+        # Determine status color
+        if order.status in ['paid', 'shipped']:
+            status_color = 'bg-amber-100 text-amber-700'
+            transaction_status = 'Pending'
+        elif order.status == 'delivered':
+            status_color = 'bg-emerald-100 text-emerald-700'
+            transaction_status = 'Completed'
+        elif order.status == 'cancelled':
+            status_color = 'bg-red-100 text-red-700'
+            transaction_status = 'Cancelled'
+        else:
+            status_color = 'bg-gray-100 text-gray-700'
+            transaction_status = order.status.replace('_', ' ').title()
+        
+        # Calculate amount
+        amount = order.seller_amount if order.seller_amount else Decimal('0.00')
+        
+        transactions.append({
+            'id': f'TXN-{order.order_number}',
+            'description': f'Order {order.order_number} - {order.product.name if order.product else "Multiple Items"}',
+            'date': order.paid_at if order.paid_at else order.created_at,
+            'amount': f'+{amount:,.0f}',
+            'status': transaction_status,
+            'status_color': status_color,
+            'order_id': order.id,
+        })
+    
+    # Get multi-seller order items
+    order_items = OrderItem.objects.filter(
+        product__seller=user
+    ).select_related('order', 'product').order_by('-order__created_at')
+    
+    for item in order_items:
+        order = item.order
+        
+        # Determine status color
+        if order.status in ['paid', 'shipped']:
+            status_color = 'bg-amber-100 text-amber-700'
+            transaction_status = 'Pending'
+        elif order.status == 'delivered':
+            status_color = 'bg-emerald-100 text-emerald-700'
+            transaction_status = 'Completed'
+        elif order.status == 'cancelled':
+            status_color = 'bg-red-100 text-red-700'
+            transaction_status = 'Cancelled'
+        else:
+            status_color = 'bg-gray-100 text-gray-700'
+            transaction_status = order.status.replace('_', ' ').title()
+        
+        # Calculate amount (subtotal minus platform fee)
+        amount = item.subtotal * Decimal('0.98')
+        
+        transactions.append({
+            'id': f'TXN-{order.order_number}-{item.id}',
+            'description': f'Order {order.order_number} - {item.product.name}',
+            'date': order.paid_at if order.paid_at else order.created_at,
+            'amount': f'+{amount:,.0f}',
+            'status': transaction_status,
+            'status_color': status_color,
+            'order_id': order.id,
+        })
+    
+    # Sort by date (newest first)
+    transactions.sort(key=lambda x: x['date'], reverse=True)
+    
+    # Format dates
+    for transaction in transactions:
+        transaction['date'] = transaction['date'].strftime('%b %d, %Y')
+    
+    # Apply pagination
+    total = len(transactions)
+    transactions = transactions[offset:offset+limit]
+    
+    return Response({
+        'transactions': transactions,
+        'total': total,
+        'limit': limit,
+        'offset': offset,
+    })
+
+
+# Product Performance Endpoint
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def product_performance(request):
+    """Get product performance statistics"""
+    from django.db.models import Count, Sum
+    
+    user = request.user
+    
+    # Check if user is a seller
+    if user.role not in ['seller', 'both']:
+        return Response(
+            {'error': 'Only sellers can access this endpoint'},
+            status=status.HTTP_403_FORBIDDEN
+        )
+    
+    # Get top products by sales (from delivered orders)
+    # Single-seller orders
+    single_sales = Order.objects.filter(
+        seller=user,
+        status='delivered',
+        product__isnull=False
+    ).values('product', 'product__name').annotate(
+        sales_count=Count('id'),
+        revenue=Sum('seller_amount')
+    )
+    
+    # Multi-seller orders
+    multi_sales = OrderItem.objects.filter(
+        product__seller=user,
+        order__status='delivered'
+    ).values('product', 'product__name').annotate(
+        sales_count=Count('id'),
+        revenue=Sum('subtotal')
+    )
+    
+    # Combine and aggregate
+    product_stats = {}
+    
+    for sale in single_sales:
+        product_id = sale['product']
+        product_name = sale['product__name']
+        if product_id not in product_stats:
+            product_stats[product_id] = {
+                'name': product_name,
+                'sales': 0,
+                'revenue': Decimal('0.00')
+            }
+        product_stats[product_id]['sales'] += sale['sales_count']
+        product_stats[product_id]['revenue'] += sale['revenue'] or Decimal('0.00')
+    
+    for sale in multi_sales:
+        product_id = sale['product']
+        product_name = sale['product__name']
+        if product_id not in product_stats:
+            product_stats[product_id] = {
+                'name': product_name,
+                'sales': 0,
+                'revenue': Decimal('0.00')
+            }
+        product_stats[product_id]['sales'] += sale['sales_count']
+        # Apply platform fee reduction
+        product_stats[product_id]['revenue'] += (sale['revenue'] or Decimal('0.00')) * Decimal('0.98')
+    
+    # Convert to list and sort by sales
+    performance = list(product_stats.values())
+    performance.sort(key=lambda x: x['sales'], reverse=True)
+    
+    # Get top 10 products
+    performance = performance[:10]
+    
+    # Convert revenue to string
+    for item in performance:
+        item['revenue'] = str(item['revenue'])
+    
+    return Response({
+        'products': performance
     })
