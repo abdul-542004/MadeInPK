@@ -254,6 +254,38 @@ class ProductViewSet(viewsets.ModelViewSet):
         
         serializer = ProductImageSerializer(product_image, context={'request': request})
         return Response(serializer.data, status=status.HTTP_201_CREATED)
+    
+    @action(detail=True, methods=['delete'], url_path='delete_image/(?P<image_id>[^/.]+)')
+    def delete_image(self, request, pk=None, image_id=None):
+        """Delete a product image"""
+        product = self.get_object()
+        
+        if product.seller != request.user:
+            return Response({'error': 'You can only delete images from your own products'},
+                          status=status.HTTP_403_FORBIDDEN)
+        
+        try:
+            product_image = ProductImage.objects.get(id=image_id, product=product)
+        except ProductImage.DoesNotExist:
+            return Response({'error': 'Image not found'}, 
+                          status=status.HTTP_404_NOT_FOUND)
+        
+        # Don't allow deleting the only image
+        if product.images.count() <= 1:
+            return Response({'error': 'Product must have at least one image'}, 
+                          status=status.HTTP_400_BAD_REQUEST)
+        
+        # If deleting primary image, make another image primary
+        was_primary = product_image.is_primary
+        product_image.delete()
+        
+        if was_primary:
+            first_image = product.images.first()
+            if first_image:
+                first_image.is_primary = True
+                first_image.save()
+        
+        return Response(status=status.HTTP_204_NO_CONTENT)
 # Auction ViewSet
 class AuctionListingViewSet(viewsets.ModelViewSet):
     """CRUD operations for auction listings"""
@@ -277,14 +309,16 @@ class AuctionListingViewSet(viewsets.ModelViewSet):
         status_param = self.request.query_params.get('status')
         if status_param:
             queryset = queryset.filter(status=status_param)
-        else:
-            # By default, show only active auctions
-            queryset = queryset.filter(status='active')
         
         # Filter by seller
         seller_id = self.request.query_params.get('seller')
         if seller_id:
             queryset = queryset.filter(product__seller_id=seller_id)
+        
+        # Check if filtering for current authenticated user's auctions
+        my_auctions = self.request.query_params.get('my_auctions')
+        if my_auctions and self.request.user.is_authenticated:
+            queryset = queryset.filter(product__seller=self.request.user)
         
         # Filter by category
         category_id = self.request.query_params.get('category')
@@ -365,9 +399,11 @@ class FixedPriceListingViewSet(viewsets.ModelViewSet):
         status_param = self.request.query_params.get('status')
         if status_param:
             queryset = queryset.filter(status=status_param)
-        else:
-            # By default, show only active listings
-            queryset = queryset.filter(status='active')
+        
+        # Check if filtering for current authenticated user's listings
+        my_listings = self.request.query_params.get('my_listings')
+        if my_listings and self.request.user.is_authenticated:
+            queryset = queryset.filter(product__seller=self.request.user)
         
         # Filter by seller
         seller_id = self.request.query_params.get('seller')
@@ -707,7 +743,7 @@ class ConversationViewSet(viewsets.ModelViewSet):
         user = self.request.user
         return Conversation.objects.filter(
             Q(buyer=user) | Q(seller=user)
-        ).select_related('buyer', 'seller', 'order').prefetch_related('messages')
+        ).select_related('buyer', 'seller', 'product').prefetch_related('messages', 'product__images')
     
     @action(detail=True, methods=['get'])
     def messages(self, request, pk=None):
@@ -1268,3 +1304,55 @@ def payment_cancel(request):
             pass
     
     return Response({'message': 'Payment cancelled'})
+
+
+# Seller Statistics Endpoint
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def seller_statistics(request):
+    """Get seller dashboard statistics"""
+    user = request.user
+    
+    # Check if user is a seller
+    if user.role not in ['seller', 'both']:
+        return Response(
+            {'error': 'You must be a seller to access statistics'},
+            status=status.HTTP_403_FORBIDDEN
+        )
+    
+    # Get seller's products
+    total_products = Product.objects.filter(seller=user).count()
+    
+    # Get active auctions
+    active_auctions = AuctionListing.objects.filter(
+        product__seller=user,
+        status='active'
+    ).count()
+    
+    # Get seller's orders (as seller)
+    seller_orders = Order.objects.filter(seller=user)
+    total_orders = seller_orders.count()
+    
+    # Get pending orders (paid but not shipped)
+    pending_orders = seller_orders.filter(status='paid').count()
+    
+    # Calculate total revenue (from completed/delivered orders)
+    from decimal import Decimal
+    from django.db.models import Sum
+    total_revenue = seller_orders.filter(
+        status__in=['paid', 'shipped', 'delivered']
+    ).aggregate(
+        total=Sum('seller_amount')
+    )['total'] or Decimal('0.00')
+    
+    # Count total sales (delivered orders)
+    total_sales = seller_orders.filter(status='delivered').count()
+    
+    return Response({
+        'total_sales': total_sales,
+        'total_orders': total_orders,
+        'pending_orders': pending_orders,
+        'total_revenue': str(total_revenue),
+        'total_products': total_products,
+        'active_auctions': active_auctions,
+    })

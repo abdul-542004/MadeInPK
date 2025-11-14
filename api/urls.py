@@ -31,6 +31,9 @@ urlpatterns = [
     path('auth/profile/', views.profile, name='profile'),
     path('auth/become-seller/', views.become_seller, name='become-seller'),
     
+    # Seller statistics
+    path('seller/statistics/', views.seller_statistics, name='seller-statistics'),
+    
     # Stripe webhook
     path('stripe/webhook/', views.stripe_webhook, name='stripe-webhook'),
     
