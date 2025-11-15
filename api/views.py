@@ -95,12 +95,25 @@ def logout(request):
     return Response({'message': 'Logged out successfully'})
 
 
-@api_view(['GET'])
+@api_view(['GET', 'PUT', 'PATCH'])
 @permission_classes([IsAuthenticated])
 def profile(request):
-    """Get current user profile"""
-    serializer = UserProfileSerializer(request.user)
-    return Response(serializer.data)
+    """Get or update current user profile"""
+    if request.method == 'GET':
+        serializer = UserProfileSerializer(request.user)
+        return Response(serializer.data)
+    
+    # PUT or PATCH - update profile
+    partial = request.method == 'PATCH'
+    serializer = UserSerializer(request.user, data=request.data, partial=partial)
+    
+    if serializer.is_valid():
+        serializer.save()
+        # Return full profile data
+        profile_serializer = UserProfileSerializer(request.user)
+        return Response(profile_serializer.data)
+    
+    return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
 @api_view(['GET', 'POST'])
@@ -225,6 +238,16 @@ class ProductViewSet(viewsets.ModelViewSet):
         condition = self.request.query_params.get('condition')
         if condition:
             queryset = queryset.filter(condition=condition)
+        
+        # Filter by province (based on seller's business address or default address)
+        province_id = self.request.query_params.get('province')
+        if province_id:
+            # Filter by sellers who have business address in the specified province
+            # OR sellers who have default address in the specified province
+            queryset = queryset.filter(
+                Q(seller__seller_profile__business_address_id__city__province_id=province_id) |
+                Q(seller__addresses__city__province_id=province_id, seller__addresses__is_default=True)
+            ).distinct()
         
         return queryset
     
@@ -416,6 +439,14 @@ class FixedPriceListingViewSet(viewsets.ModelViewSet):
         if category_id:
             queryset = queryset.filter(product__category_id=category_id)
         
+        # Filter by province
+        province_id = self.request.query_params.get('province')
+        if province_id:
+            queryset = queryset.filter(
+                Q(product__seller__seller_profile__business_address_id__city__province_id=province_id) |
+                Q(product__seller__addresses__city__province_id=province_id, product__seller__addresses__is_default=True)
+            ).distinct()
+        
         # Price range filter
         min_price = self.request.query_params.get('min_price')
         if min_price:
@@ -558,6 +589,38 @@ class FixedPriceListingViewSet(viewsets.ModelViewSet):
         )
         
         return Response(OrderSerializer(order).data, status=status.HTTP_201_CREATED)
+    
+    @action(detail=True, methods=['post'], permission_classes=[IsAuthenticated])
+    def toggle_status(self, request, pk=None):
+        """Toggle listing status between active and inactive"""
+        listing = self.get_object()
+        
+        # Check if user owns this listing
+        if listing.product.seller != request.user:
+            return Response(
+                {'error': 'You do not have permission to modify this listing'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        # Toggle between active and inactive (don't touch out_of_stock)
+        if listing.status == 'active':
+            listing.status = 'inactive'
+            message = 'Listing deactivated successfully'
+        elif listing.status == 'inactive':
+            listing.status = 'active'
+            message = 'Listing activated successfully'
+        elif listing.status == 'out_of_stock':
+            return Response(
+                {'error': 'Cannot activate out-of-stock listing. Please update the stock first.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        listing.save()
+        
+        return Response({
+            'message': message,
+            'status': listing.status
+        }, status=status.HTTP_200_OK)
 
 
 # Order ViewSet
@@ -572,32 +635,56 @@ class OrderViewSet(viewsets.ReadOnlyModelViewSet):
     def get_queryset(self):
         user = self.request.user
         
-        # Users can see orders where they are buyer or seller
-        queryset = Order.objects.filter(
-            Q(buyer=user) | Q(seller=user)
-        ).select_related(
+        # Filter by role (purchases or sales)
+        role = self.request.query_params.get('role')
+        
+        if role == 'buyer':
+            # Buyer sees all orders where they are the buyer
+            queryset = Order.objects.filter(buyer=user)
+        elif role == 'seller':
+            # Seller sees:
+            # 1. Single-seller orders where they are the seller
+            # 2. Multi-seller cart orders where they have items (via OrderItems)
+            queryset = Order.objects.filter(
+                Q(seller=user) |  # Single-seller orders
+                Q(items__product__seller=user)  # Multi-seller cart orders
+            ).distinct()
+        else:
+            # Default: Users can see orders where they are buyer or seller
+            # This includes both single-seller and multi-seller orders
+            queryset = Order.objects.filter(
+                Q(buyer=user) |
+                Q(seller=user) |
+                Q(items__product__seller=user)  # Include cart orders where user is a seller
+            ).distinct()
+        
+        queryset = queryset.select_related(
             'buyer', 'seller', 'product', 'shipping_address__city__province'
-        )
+        ).prefetch_related('items__product')
         
         # Filter by status
         status_param = self.request.query_params.get('status')
         if status_param:
             queryset = queryset.filter(status=status_param)
         
-        # Filter by role (purchases or sales)
-        role = self.request.query_params.get('role')
-        if role == 'buyer':
-            queryset = queryset.filter(buyer=user)
-        elif role == 'seller':
-            queryset = queryset.filter(seller=user)
-        
         return queryset
     
     @action(detail=True, methods=['post'])
     def mark_shipped(self, request, pk=None):
-        """Mark order as shipped (seller only)"""
+        """Mark order as shipped (seller only)
+        For single-seller orders: marks entire order as shipped
+        For multi-seller orders: this endpoint is not applicable (not implemented yet)
+        """
         order = self.get_object()
         
+        # Check if this is a multi-seller order
+        if order.is_multi_seller():
+            return Response({
+                'error': 'Multi-seller cart orders cannot be marked as shipped directly. '
+                        'Each seller must ship their items individually.'
+            }, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Single-seller order validation
         if order.seller != request.user:
             return Response({'error': 'Only seller can mark as shipped'}, 
                           status=status.HTTP_403_FORBIDDEN)
@@ -638,14 +725,28 @@ class OrderViewSet(viewsets.ReadOnlyModelViewSet):
         order.delivered_at = timezone.now()
         order.save()
         
-        # Notify seller
-        Notification.objects.create(
-            user=order.seller,
-            notification_type='order_delivered',
-            title='Order delivered',
-            message=f'Order {order.order_number} has been delivered',
-            order=order
-        )
+        # Notify seller(s)
+        if order.is_multi_seller():
+            # Notify all sellers involved in the cart order
+            sellers = order.get_sellers()
+            for seller in sellers:
+                Notification.objects.create(
+                    user=seller,
+                    notification_type='order_delivered',
+                    title='Order delivered',
+                    message=f'Order {order.order_number} has been delivered',
+                    order=order
+                )
+        else:
+            # Notify single seller
+            if order.seller:
+                Notification.objects.create(
+                    user=order.seller,
+                    notification_type='order_delivered',
+                    title='Order delivered',
+                    message=f'Order {order.order_number} has been delivered',
+                    order=order
+                )
         
         # Request feedback
         Notification.objects.create(

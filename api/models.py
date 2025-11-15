@@ -42,7 +42,9 @@ class SellerProfile(models.Model):
     user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='seller_profile')
     brand_name = models.CharField(max_length=255, blank=True)
     biography = models.TextField(blank=True)
-    business_address = models.TextField(blank=True)  # Full business address
+    business_address_text = models.TextField(blank=True)  # Legacy text field (deprecated)
+    business_address_id = models.ForeignKey('Address', on_delete=models.SET_NULL, null=True, blank=True, related_name='seller_profiles')  # New structured address
+    business_phone = models.CharField(max_length=15, blank=True)  # Business contact number
     website = models.URLField(blank=True)
     social_media_links = models.JSONField(default=dict, blank=True)  # {'facebook': 'url', 'instagram': 'url'}
     is_verified = models.BooleanField(default=False)  # Admin verification
@@ -56,6 +58,16 @@ class SellerProfile(models.Model):
     
     def __str__(self):
         return f"Seller Profile: {self.user.username} - {self.brand_name or 'No Brand'}"
+    
+    def get_province(self):
+        """Get the province for this seller's business"""
+        if self.business_address_id:
+            return self.business_address_id.city.province
+        # Fallback to user's default address
+        default_address = self.user.addresses.filter(is_default=True).first()
+        if default_address:
+            return default_address.city.province
+        return None
     
     def update_rating(self):
         """Update average rating from feedbacks"""

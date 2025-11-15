@@ -89,13 +89,37 @@ class UserProfileSerializer(serializers.ModelSerializer):
 class SellerProfileSerializer(serializers.ModelSerializer):
     user_username = serializers.CharField(source='user.username', read_only=True)
     user_email = serializers.CharField(source='user.email', read_only=True)
+    business_address = serializers.SerializerMethodField()  # For backward compatibility
+    business_address_detail = serializers.SerializerMethodField()
+    province_id = serializers.IntegerField(write_only=True, required=False, allow_null=True)
+    province_name = serializers.SerializerMethodField()
     
     class Meta:
         model = SellerProfile
         fields = ['id', 'user', 'user_username', 'user_email', 'brand_name', 
-                  'biography', 'business_address', 'website', 'social_media_links',
+                  'biography', 'business_address', 'business_address_detail', 'business_address_id',
+                  'province_id', 'province_name', 'business_phone', 'website', 'social_media_links',
                   'is_verified', 'average_rating', 'total_feedbacks', 'created_at', 'updated_at']
         read_only_fields = ['user', 'average_rating', 'total_feedbacks', 'created_at', 'updated_at']
+    
+    def get_business_address(self, obj):
+        """Return formatted address string for backward compatibility"""
+        if obj.business_address_id:
+            addr = obj.business_address_id
+            return f"{addr.street_address}, {addr.city.name}, {addr.city.province.name} {addr.postal_code}"
+        return obj.business_address_text or ""
+    
+    def get_business_address_detail(self, obj):
+        """Return full address details"""
+        if obj.business_address_id:
+            from .serializers import AddressSerializer
+            return AddressSerializer(obj.business_address_id).data
+        return None
+    
+    def get_province_name(self, obj):
+        """Get province name from business address"""
+        province = obj.get_province()
+        return province.name if province else None
 
 
 # Address Serializers
@@ -739,7 +763,9 @@ class BecomeSellerSerializer(serializers.Serializer):
     """Serializer for buyers to become sellers"""
     brand_name = serializers.CharField(max_length=255, required=False, allow_blank=True)
     biography = serializers.CharField(required=False, allow_blank=True)
-    business_address = serializers.CharField(required=False, allow_blank=True)
+    business_address_text = serializers.CharField(required=False, allow_blank=True)  # Legacy text field
+    business_address_id = serializers.IntegerField(required=False, allow_null=True)  # Address ID
+    business_phone = serializers.CharField(max_length=15, required=False, allow_blank=True)
     website = serializers.URLField(required=False, allow_blank=True)
     social_media_links = serializers.JSONField(required=False, default=dict)
     
@@ -753,6 +779,13 @@ class BecomeSellerSerializer(serializers.Serializer):
         # Check if seller profile already exists
         if hasattr(user, 'seller_profile'):
             raise serializers.ValidationError("Seller profile already exists")
+        
+        # Validate business_address_id if provided
+        if data.get('business_address_id'):
+            try:
+                address = Address.objects.get(id=data['business_address_id'], user=user)
+            except Address.DoesNotExist:
+                raise serializers.ValidationError("Invalid business address ID or address does not belong to you")
         
         return data
     
@@ -768,7 +801,9 @@ class BecomeSellerSerializer(serializers.Serializer):
             user=user,
             brand_name=self.validated_data.get('brand_name', ''),
             biography=self.validated_data.get('biography', ''),
-            business_address=self.validated_data.get('business_address', ''),
+            business_address_text=self.validated_data.get('business_address_text', ''),
+            business_address_id_id=self.validated_data.get('business_address_id'),
+            business_phone=self.validated_data.get('business_phone', ''),
             website=self.validated_data.get('website', ''),
             social_media_links=self.validated_data.get('social_media_links', {})
         )
