@@ -68,10 +68,10 @@ class UserProfileSerializer(serializers.ModelSerializer):
         return None
     
     def get_total_sales(self, obj):
-        return obj.sales.filter(status='delivered').count()
+        return obj.sales.filter(status__in=['shipped', 'delivered']).count()
     
     def get_total_purchases(self, obj):
-        return obj.purchases.filter(status='delivered').count()
+        return obj.purchases.filter(status__in=['shipped', 'delivered']).count()
     
     def get_average_seller_rating(self, obj):
         feedbacks = obj.feedbacks_received.all()
@@ -255,7 +255,8 @@ class ProductCreateSerializer(serializers.ModelSerializer):
     
     class Meta:
         model = Product
-        fields = ['category', 'name', 'description', 'condition', 'images']
+        fields = ['id', 'category', 'name', 'description', 'condition', 'images']
+        read_only_fields = ['id']
     
     def create(self, validated_data):
         images_data = validated_data.pop('images', [])
@@ -335,7 +336,7 @@ class AuctionListingSerializer(serializers.ModelSerializer):
         if obj.status in ['ended', 'completed'] and request and obj.product.seller == request.user:
             order = obj.orders.first()
             if order:
-                return {
+                order_info = {
                     'order_id': order.id,
                     'order_number': order.order_number,
                     'status': order.status,
@@ -344,42 +345,129 @@ class AuctionListingSerializer(serializers.ModelSerializer):
                     'seller_amount': str(order.seller_amount),
                     'payment_deadline': order.payment_deadline,
                 }
+                # Include shipping address if order is paid
+                if order.status in ['paid', 'shipped'] and order.shipping_address:
+                    addr = order.shipping_address
+                    order_info['shipping_address'] = {
+                        'street_address': addr.street_address,
+                        'city_name': addr.city.name,
+                        'province_name': addr.city.province.name,
+                        'postal_code': addr.postal_code
+                    }
+                return order_info
         return None
 
 
 class AuctionCreateSerializer(serializers.ModelSerializer):
-    product_id = serializers.IntegerField(write_only=True)
+    # Product fields for creating product and auction together
+    name = serializers.CharField(write_only=True)
+    description = serializers.CharField(write_only=True)
+    category = serializers.IntegerField(write_only=True)
+    condition = serializers.CharField(write_only=True)
+    images = serializers.ListField(
+        child=serializers.ImageField(), 
+        write_only=True, 
+        required=False
+    )
+    duration = serializers.CharField(write_only=True, required=False)  # Optional field like "24 hours"
+    
+    # Legacy support for two-step creation
+    product_id = serializers.IntegerField(write_only=True, required=False)
     
     class Meta:
         model = AuctionListing
-        fields = ['product_id', 'starting_price', 'start_time', 'end_time']
+        fields = ['product_id', 'name', 'description', 'category', 'condition', 'images',
+                  'starting_price', 'start_time', 'end_time', 'duration']
     
     def validate_product_id(self, value):
+        """Legacy validation for two-step creation"""
+        if value:
+            try:
+                product = Product.objects.get(id=value)
+                # Check if product already has a listing
+                if hasattr(product, 'auction') or hasattr(product, 'fixed_price'):
+                    raise serializers.ValidationError("Product already has a listing")
+                # Check if user is the seller
+                if product.seller != self.context['request'].user:
+                    raise serializers.ValidationError("You can only create auctions for your own products")
+                return value
+            except Product.DoesNotExist:
+                raise serializers.ValidationError("Product not found")
+        return value
+    
+    def validate_category(self, value):
+        """Validate category exists"""
         try:
-            product = Product.objects.get(id=value)
-            # Check if product already has a listing
-            if hasattr(product, 'auction') or hasattr(product, 'fixed_price'):
-                raise serializers.ValidationError("Product already has a listing")
-            # Check if user is the seller
-            if product.seller != self.context['request'].user:
-                raise serializers.ValidationError("You can only create auctions for your own products")
+            Category.objects.get(id=value)
             return value
-        except Product.DoesNotExist:
-            raise serializers.ValidationError("Product not found")
+        except Category.DoesNotExist:
+            raise serializers.ValidationError("Category not found")
+    
+    def validate_condition(self, value):
+        """Validate condition is a valid choice"""
+        valid_conditions = ['new', 'like_new', 'good', 'fair']
+        if value not in valid_conditions:
+            raise serializers.ValidationError(f"Condition must be one of: {', '.join(valid_conditions)}")
+        return value
     
     def validate(self, data):
-        if data['end_time'] <= data['start_time']:
-            raise serializers.ValidationError("End time must be after start time")
+        # Check if using legacy two-step creation or new one-step creation
+        if not data.get('product_id'):
+            # New one-step creation - validate product fields
+            if not all([data.get('name'), data.get('description'), data.get('category'), data.get('condition')]):
+                raise serializers.ValidationError(
+                    "When product_id is not provided, name, description, category, and condition are required"
+                )
+        
+        # Validate time fields
+        if data.get('end_time') and data.get('start_time'):
+            if data['end_time'] <= data['start_time']:
+                raise serializers.ValidationError("End time must be after start time")
+        
         return data
     
     def create(self, validated_data):
-        product_id = validated_data.pop('product_id')
-        product = Product.objects.get(id=product_id)
+        # Check if using legacy two-step or new one-step creation
+        product_id = validated_data.pop('product_id', None)
         
+        if product_id:
+            # Legacy two-step creation
+            product = Product.objects.get(id=product_id)
+        else:
+            # New one-step creation - create product first
+            name = validated_data.pop('name')
+            description = validated_data.pop('description')
+            category_id = validated_data.pop('category')
+            condition = validated_data.pop('condition')
+            images_data = validated_data.pop('images', [])
+            validated_data.pop('duration', None)  # Remove duration if present
+            
+            # Create product
+            category = Category.objects.get(id=category_id)
+            product = Product.objects.create(
+                seller=self.context['request'].user,
+                category=category,
+                name=name,
+                description=description,
+                condition=condition
+            )
+            
+            # Create product images
+            for idx, image_file in enumerate(images_data):
+                ProductImage.objects.create(
+                    product=product,
+                    image=image_file,
+                    is_primary=(idx == 0),
+                    order=idx
+                )
+        
+        # Create auction listing
         auction = AuctionListing.objects.create(
             product=product,
             current_price=validated_data['starting_price'],
-            **validated_data
+            starting_price=validated_data['starting_price'],
+            start_time=validated_data['start_time'],
+            end_time=validated_data['end_time']
         )
         return auction
 
@@ -857,13 +945,14 @@ class CartItemSerializer(serializers.ModelSerializer):
     unit_price = serializers.SerializerMethodField()
     subtotal = serializers.SerializerMethodField()
     is_available = serializers.SerializerMethodField()
+    available_quantity = serializers.IntegerField(source='listing.quantity', read_only=True)
     seller_id = serializers.IntegerField(source='listing.product.seller.id', read_only=True)
     seller_username = serializers.CharField(source='listing.product.seller.username', read_only=True)
     
     class Meta:
         model = CartItem
         fields = ['id', 'listing_id', 'product', 'quantity', 'unit_price', 'subtotal',
-                  'is_available', 'seller_id', 'seller_username', 'added_at', 'updated_at']
+                  'is_available', 'available_quantity', 'seller_id', 'seller_username', 'added_at', 'updated_at']
         read_only_fields = ['added_at', 'updated_at']
     
     def get_unit_price(self, obj):

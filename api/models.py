@@ -311,7 +311,7 @@ class Order(models.Model):
         ('payment_failed', 'Payment Failed'),
         ('paid', 'Paid'),
         ('shipped', 'Shipped'),
-        ('delivered', 'Delivered'),
+        ('delivered', 'Delivered (Deprecated - Use Shipped)'),  # Deprecated, use 'shipped' instead
         ('cancelled', 'Cancelled'),
     ]
     

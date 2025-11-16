@@ -133,7 +133,11 @@ class Command(BaseCommand):
                 'role': 'seller',
                 'brand_name': 'Hassan Textiles',
                 'biography': 'Family-owned textile business for 3 generations, specializing in handwoven fabrics.',
-                'business_address': '123 Textile Market, Faisalabad, Punjab',
+                'business_street': '123 Textile Market',
+                'business_city': 'Faisalabad',
+                'business_province': 'Punjab',
+                'business_postal_code': '38000',
+                'business_phone': '+923041234568',
                 'website': 'https://hassantextiles.pk',
                 'is_verified': True
             },
@@ -146,7 +150,11 @@ class Command(BaseCommand):
                 'role': 'seller',
                 'brand_name': 'Ayesha Crafts',
                 'biography': 'Artisan specializing in traditional Pakistani embroidery and handicrafts.',
-                'business_address': '456 Artisan Street, Lahore, Punjab',
+                'business_street': '456 Artisan Street',
+                'business_city': 'Lahore',
+                'business_province': 'Punjab',
+                'business_postal_code': '54000',
+                'business_phone': '+923051234568',
                 'website': 'https://ayesha-crafts.pk',
                 'is_verified': True
             },
@@ -159,7 +167,11 @@ class Command(BaseCommand):
                 'role': 'seller',
                 'brand_name': 'Ahmed Pottery',
                 'biography': 'Master potter creating traditional ceramics using age-old techniques.',
-                'business_address': '789 Pottery Lane, Multan, Punjab',
+                'business_street': '789 Pottery Lane',
+                'business_city': 'Multan',
+                'business_province': 'Punjab',
+                'business_postal_code': '60000',
+                'business_phone': '+923061234568',
                 'is_verified': False
             },
             {
@@ -171,7 +183,11 @@ class Command(BaseCommand):
                 'role': 'both',
                 'brand_name': 'Zara Jewelry',
                 'biography': 'Designer creating contemporary jewelry with traditional Pakistani motifs.',
-                'business_address': '321 Jewelry Bazaar, Karachi, Sindh',
+                'business_street': '321 Jewelry Bazaar',
+                'business_city': 'Karachi',
+                'business_province': 'Sindh',
+                'business_postal_code': '75500',
+                'business_phone': '+923071234568',
                 'website': 'https://zarajewelry.pk',
                 'is_verified': True
             }
@@ -213,19 +229,45 @@ class Command(BaseCommand):
                 user.set_password('password123')  # Hash the password
                 user.save()
 
-                # Create seller profile
-                SellerProfile.objects.create(
-                    user=user,
-                    brand_name=seller_data['brand_name'],
-                    biography=seller_data['biography'],
-                    business_address=seller_data['business_address'],
-                    website=seller_data.get('website', ''),
-                    is_verified=seller_data['is_verified']
-                )
+                # Create business address for seller
+                business_city = City.objects.filter(
+                    name=seller_data['business_city'],
+                    province__name=seller_data['business_province']
+                ).first()
+                
+                if business_city:
+                    business_address = Address.objects.create(
+                        user=user,
+                        street_address=seller_data['business_street'],
+                        city=business_city,
+                        postal_code=seller_data['business_postal_code'],
+                        is_default=False
+                    )
+                    
+                    # Create seller profile
+                    SellerProfile.objects.create(
+                        user=user,
+                        brand_name=seller_data['brand_name'],
+                        biography=seller_data['biography'],
+                        business_address_id=business_address,
+                        business_phone=seller_data.get('business_phone', ''),
+                        website=seller_data.get('website', ''),
+                        is_verified=seller_data['is_verified']
+                    )
+                else:
+                    # Fallback: create seller profile without address
+                    SellerProfile.objects.create(
+                        user=user,
+                        brand_name=seller_data['brand_name'],
+                        biography=seller_data['biography'],
+                        business_phone=seller_data.get('business_phone', ''),
+                        website=seller_data.get('website', ''),
+                        is_verified=seller_data['is_verified']
+                    )
 
                 self.stdout.write(f'  Created seller: {user.username} ({seller_data["brand_name"]})')
 
-                # Create address for seller
+                # Create personal address for seller
                 self.create_sample_address(user)
 
     def create_sample_address(self, user):

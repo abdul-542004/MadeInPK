@@ -75,13 +75,16 @@ def check_auction_endings():
                     cancel_url=f"{frontend_url}/auctions/{auction.id}?payment_cancelled=true"
                 )
                 
+                # Use frontend payment URL for the email
                 order.payment_url = payment_result['checkout_url']
                 if payment_result.get('session_id'):
                     order.stripe_payment_intent_id = payment_result['session_id']
                 order.save()
             except Exception as e:
                 print(f"Failed to create payment URL for auction order {order.id}: {str(e)}")
-                order.payment_url = f"{frontend_url}/orders/{order.id}/payment"
+                # Fallback to frontend order details page
+                frontend_url = os.getenv('FRONTEND_URL', 'http://localhost:5173')
+                order.payment_url = f"{frontend_url}/my-orders"
                 order.save()
             
             # Create notification for winner

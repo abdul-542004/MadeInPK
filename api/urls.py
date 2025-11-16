@@ -40,6 +40,10 @@ urlpatterns = [
     # Stripe webhook
     path('stripe/webhook/', views.stripe_webhook, name='stripe-webhook'),
     
+    # Admin tools
+    path('admin/trigger-transfers/', views.admin_trigger_transfers, name='admin-trigger-transfers'),
+    path('admin/orders-needing-transfers/', views.admin_orders_needing_transfers, name='admin-orders-needing-transfers'),
+    
     # Payment pages
     path('payments/success/', views.payment_success, name='payment-success'),
     path('payments/cancel/', views.payment_cancel, name='payment-cancel'),

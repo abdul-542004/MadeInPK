@@ -745,56 +745,57 @@ class OrderViewSet(viewsets.ReadOnlyModelViewSet):
         
         return Response({'message': 'Order marked as shipped'})
     
-    @action(detail=True, methods=['post'])
-    def mark_delivered(self, request, pk=None):
-        """Mark order as delivered (buyer only)"""
-        order = self.get_object()
-        
-        if order.buyer != request.user:
-            return Response({'error': 'Only buyer can mark as delivered'}, 
-                          status=status.HTTP_403_FORBIDDEN)
-        
-        if order.status != 'shipped':
-            return Response({'error': 'Order must be shipped first'}, 
-                          status=status.HTTP_400_BAD_REQUEST)
-        
-        order.status = 'delivered'
-        order.delivered_at = timezone.now()
-        order.save()
-        
-        # Notify seller(s)
-        if order.is_multi_seller():
-            # Notify all sellers involved in the cart order
-            sellers = order.get_sellers()
-            for seller in sellers:
-                Notification.objects.create(
-                    user=seller,
-                    notification_type='order_delivered',
-                    title='Order delivered',
-                    message=f'Order {order.order_number} has been delivered',
-                    order=order
-                )
-        else:
-            # Notify single seller
-            if order.seller:
-                Notification.objects.create(
-                    user=order.seller,
-                    notification_type='order_delivered',
-                    title='Order delivered',
-                    message=f'Order {order.order_number} has been delivered',
-                    order=order
-                )
-        
-        # Request feedback
-        Notification.objects.create(
-            user=order.buyer,
-            notification_type='feedback_request',
-            title='Please provide feedback',
-            message=f'Share your experience with order {order.order_number}',
-            order=order
-        )
-        
-        return Response({'message': 'Order marked as delivered'})
+    # DEPRECATED: mark_delivered endpoint - 'shipped' is now the final status
+    # @action(detail=True, methods=['post'])
+    # def mark_delivered(self, request, pk=None):
+    #     """DEPRECATED: Mark order as delivered (buyer only). Use 'shipped' as final status instead."""
+    #     order = self.get_object()
+    #     
+    #     if order.buyer != request.user:
+    #         return Response({'error': 'Only buyer can mark as delivered'}, 
+    #                       status=status.HTTP_403_FORBIDDEN)
+    #     
+    #     if order.status != 'shipped':
+    #         return Response({'error': 'Order must be shipped first'}, 
+    #                       status=status.HTTP_400_BAD_REQUEST)
+    #     
+    #     order.status = 'delivered'
+    #     order.delivered_at = timezone.now()
+    #     order.save()
+    #     
+    #     # Notify seller(s)
+    #     if order.is_multi_seller():
+    #         # Notify all sellers involved in the cart order
+    #         sellers = order.get_sellers()
+    #         for seller in sellers:
+    #             Notification.objects.create(
+    #                 user=seller,
+    #                 notification_type='order_delivered',
+    #                 title='Order delivered',
+    #                 message=f'Order {order.order_number} has been delivered',
+    #                 order=order
+    #             )
+    #     else:
+    #         # Notify single seller
+    #         if order.seller:
+    #             Notification.objects.create(
+    #                 user=order.seller,
+    #                 notification_type='order_delivered',
+    #                 title='Order delivered',
+    #                 message=f'Order {order.order_number} has been delivered',
+    #                 order=order
+    #             )
+    #     
+    #     # Request feedback
+    #     Notification.objects.create(
+    #         user=order.buyer,
+    #         notification_type='feedback_request',
+    #         title='Please provide feedback',
+    #         message=f'Share your experience with order {order.order_number}',
+    #         order=order
+    #     )
+    #     
+    #     return Response({'message': 'Order marked as delivered'})
 
 
 # Feedback ViewSet
@@ -828,8 +829,8 @@ class FeedbackViewSet(viewsets.ModelViewSet):
             return Response({'error': 'Order not found or you are not the buyer'}, 
                           status=status.HTTP_400_BAD_REQUEST)
         
-        if order.status != 'delivered':
-            return Response({'error': 'Order must be delivered before feedback'}, 
+        if order.status not in ['shipped', 'delivered']:
+            return Response({'error': 'Order must be shipped before feedback'}, 
                           status=status.HTTP_400_BAD_REQUEST)
         
         if hasattr(order, 'feedback'):
@@ -1407,6 +1408,151 @@ class StripeConnectViewSet(viewsets.ViewSet):
         })
 
 
+# Admin: Manual Transfer Trigger (for fixing orders with no transfers)
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def admin_trigger_transfers(request):
+    """
+    Admin endpoint to manually trigger transfers for paid orders that don't have transfers
+    This is a fix for orders that were paid before sellers had Stripe accounts
+    """
+    from .stripe_utils import create_transfers_for_cart_order
+    from decimal import Decimal
+    
+    if request.user.role != 'admin':
+        return Response(
+            {'error': 'Only admins can trigger manual transfers'},
+            status=status.HTTP_403_FORBIDDEN
+        )
+    
+    order_id = request.data.get('order_id')
+    
+    if not order_id:
+        return Response({'error': 'order_id is required'}, status=status.HTTP_400_BAD_REQUEST)
+    
+    try:
+        order = Order.objects.get(id=order_id)
+    except Order.DoesNotExist:
+        return Response({'error': 'Order not found'}, status=status.HTTP_404_NOT_FOUND)
+    
+    # Check if order is paid
+    if order.status != 'paid' and order.status != 'shipped':
+        return Response(
+            {'error': f'Order must be paid. Current status: {order.status}'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    
+    # Get payment
+    try:
+        payment = Payment.objects.get(order=order)
+    except Payment.DoesNotExist:
+        return Response({'error': 'No payment record found for this order'}, status=status.HTTP_404_NOT_FOUND)
+    
+    # Check if transfers already exist
+    existing_transfers = SellerTransfer.objects.filter(payment=payment)
+    if existing_transfers.exists():
+        return Response({
+            'warning': 'Transfers already exist for this order',
+            'transfers': SellerTransferSerializer(existing_transfers, many=True).data
+        })
+    
+    # For cart orders, create transfers
+    if order.order_type == 'cart':
+        try:
+            create_transfers_for_cart_order(payment)
+            
+            # Get created transfers
+            new_transfers = SellerTransfer.objects.filter(payment=payment)
+            
+            return Response({
+                'message': 'Transfers triggered successfully',
+                'transfers': SellerTransferSerializer(new_transfers, many=True).data
+            })
+        except Exception as e:
+            return Response(
+                {'error': f'Failed to create transfers: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+    
+    # For single-seller orders with destination charges, transfers happen automatically
+    elif order.order_type in ['auction', 'fixed_price']:
+        if not order.seller:
+            return Response({'error': 'No seller found for this order'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Create a manual transfer record (the actual transfer already happened via destination charge)
+        if order.seller.stripe_account_id:
+            # Calculate amounts
+            seller_amount = order.total_amount - order.platform_fee
+            
+            # Create transfer record (destination charge was already made by Stripe)
+            transfer = SellerTransfer.objects.create(
+                payment=payment,
+                seller=order.seller,
+                amount=seller_amount,
+                platform_fee=order.platform_fee,
+                stripe_transfer_id='destination_charge',  # Special marker for destination charges
+                status='succeeded',
+                completed_at=payment.completed_at or timezone.now(),
+            )
+            
+            return Response({
+                'message': 'Transfer record created (destination charge)',
+                'note': 'For single-seller orders, money was already transferred via destination charge',
+                'transfers': SellerTransferSerializer([transfer], many=True).data
+            })
+        else:
+            return Response({
+                'error': f'Seller {order.seller.username} has no Stripe account. Cannot create transfer.',
+                'action': 'Seller must complete Stripe onboarding first'
+            }, status=status.HTTP_400_BAD_REQUEST)
+    
+    return Response({'error': 'Invalid order type'}, status=status.HTTP_400_BAD_REQUEST)
+
+
+# Get orders needing transfers (admin tool)
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def admin_orders_needing_transfers(request):
+    """
+    Admin endpoint to list all paid orders that don't have transfer records
+    """
+    if request.user.role != 'admin':
+        return Response(
+            {'error': 'Only admins can access this endpoint'},
+            status=status.HTTP_403_FORBIDDEN
+        )
+    
+    # Find paid/shipped orders without transfers
+    paid_orders = Order.objects.filter(
+        Q(status='paid') | Q(status='shipped')
+    ).prefetch_related('payment__seller_transfers')
+    
+    orders_without_transfers = []
+    for order in paid_orders:
+        try:
+            payment = order.payment
+            transfer_count = payment.seller_transfers.count()
+            if transfer_count == 0:
+                orders_without_transfers.append({
+                    'order_id': order.id,
+                    'order_number': order.order_number,
+                    'order_type': order.order_type,
+                    'status': order.status,
+                    'total_amount': str(order.total_amount),
+                    'created_at': order.created_at,
+                    'paid_at': order.paid_at,
+                    'sellers': [{'id': s.id, 'username': s.username, 'has_stripe': bool(s.stripe_account_id)} for s in order.get_sellers()],
+                })
+        except Payment.DoesNotExist:
+            # Order doesn't have payment record
+            pass
+    
+    return Response({
+        'count': len(orders_without_transfers),
+        'orders': orders_without_transfers
+    })
+
+
 # Stripe Webhook Handler
 @api_view(['POST'])
 @permission_classes([AllowAny])
@@ -1650,8 +1796,8 @@ def seller_statistics(request):
     
     total_revenue = single_revenue + multi_revenue
     
-    # Count total sales (delivered orders)
-    total_sales = seller_orders.filter(status='delivered').count()
+    # Count total sales (shipped or delivered orders)
+    total_sales = seller_orders.filter(status__in=['shipped', 'delivered']).count()
     
     # Calculate current month earnings
     from datetime import timedelta
