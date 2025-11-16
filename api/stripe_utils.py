@@ -26,6 +26,7 @@ def create_stripe_connect_account(user, return_url, refresh_url):
         # Create Connect account
         # Note: Pakistan only supports receiving transfers/payouts, not processing payments directly
         # Payments are processed in the platform account, then transferred to sellers
+        # IMPORTANT: Pakistan requires 'recipient' service agreement for cross-border transfers
         account = stripe.Account.create(
             type='express',
             country='PK',  # Pakistan
@@ -34,6 +35,9 @@ def create_stripe_connect_account(user, return_url, refresh_url):
                 'transfers': {'requested': True},  # Pakistan only supports transfers (payouts)
             },
             business_type='individual',
+            tos_acceptance={
+                'service_agreement': 'recipient',  # Required for Pakistan accounts
+            },
             metadata={
                 'user_id': user.id,
                 'username': user.username,
@@ -262,11 +266,12 @@ def create_transfers_for_cart_order(payment):
     
     # Get the charge ID from the payment intent
     try:
+        # Retrieve payment intent to get the charge
         payment_intent = stripe.PaymentIntent.retrieve(payment.stripe_payment_intent_id)
         
-        # Get the charge ID (first charge in the list)
-        if not payment_intent.charges or len(payment_intent.charges.data) == 0:
-            print(f"No charges found for payment intent {payment.stripe_payment_intent_id}")
+        # Get the latest charge ID
+        if not payment_intent.get('latest_charge'):
+            print(f"No charge found for payment intent {payment.stripe_payment_intent_id}")
             # Mark all transfers as failed
             for seller_data in seller_amounts:
                 seller_id = seller_data['product__seller']
@@ -286,7 +291,7 @@ def create_transfers_for_cart_order(payment):
                 )
             return
         
-        charge_id = payment_intent.charges.data[0].id
+        charge_id = payment_intent.latest_charge
         
     except stripe.error.StripeError as e:
         print(f"Error retrieving payment intent for transfers: {e}")
@@ -359,10 +364,27 @@ def create_transfers_for_cart_order(payment):
             continue
         
         try:
+            # Retrieve the charge to get the balance transaction currency
+            # In test mode, Stripe uses USD for balance transactions regardless of payment currency
+            charge = stripe.Charge.retrieve(charge_id, expand=['balance_transaction'])
+            transfer_currency = charge.balance_transaction.currency
+            
+            # Calculate transfer amount in the balance transaction currency
+            if transfer_currency != 'pkr':
+                # In test mode or when balance currency differs, calculate seller's share from balance amount
+                balance_amount = charge.balance_transaction.amount  # in cents
+                total_order_amount = order.total_amount
+                seller_percentage = float(transfer_amount) / float(total_order_amount)
+                transfer_amount_cents = int(balance_amount * seller_percentage)
+                print(f"Using balance transaction currency: {transfer_currency}, seller share: {transfer_amount_cents} cents")
+            else:
+                # In production with PKR, use the calculated PKR amount
+                transfer_amount_cents = int(transfer_amount * 100)
+            
             # Create transfer to seller using charge ID as source
             transfer = stripe.Transfer.create(
-                amount=int(transfer_amount * 100),  # Convert to cents
-                currency='pkr',
+                amount=transfer_amount_cents,
+                currency=transfer_currency,
                 destination=seller.stripe_account_id,
                 source_transaction=charge_id,  # Use charge ID instead of payment intent ID
                 metadata={
@@ -372,11 +394,13 @@ def create_transfers_for_cart_order(payment):
                     'seller_username': seller.username,
                     'payment_id': payment.id,
                     'platform_fee': str(platform_fee),
+                    'original_currency': 'pkr',
+                    'original_amount': str(transfer_amount),
                 },
                 description=f"Transfer for order {order.order_number} to {seller.username}"
             )
             
-            print(f"Successfully created transfer {transfer.id} for seller {seller.username}")
+            print(f"Successfully created transfer {transfer.id} for seller {seller.username}, amount: {transfer_amount_cents} {transfer_currency}")
             
             # Create transfer record
             from django.utils import timezone
@@ -528,10 +552,12 @@ def create_transfer_for_single_seller_order(payment):
     
     # Get the charge ID from the payment intent
     try:
+        # Retrieve payment intent to get the charge
         payment_intent = stripe.PaymentIntent.retrieve(payment.stripe_payment_intent_id)
         
-        if not payment_intent.charges or len(payment_intent.charges.data) == 0:
-            print(f"No charges found for payment intent {payment.stripe_payment_intent_id}")
+        # Get the latest charge ID
+        if not payment_intent.get('latest_charge'):
+            print(f"No charge found for payment intent {payment.stripe_payment_intent_id}")
             SellerTransfer.objects.create(
                 payment=payment,
                 seller=seller,
@@ -541,7 +567,7 @@ def create_transfer_for_single_seller_order(payment):
             )
             return
         
-        charge_id = payment_intent.charges.data[0].id
+        charge_id = payment_intent.latest_charge
         
     except stripe.error.StripeError as e:
         print(f"Error retrieving payment intent for transfer: {e}")
@@ -580,9 +606,25 @@ def create_transfer_for_single_seller_order(payment):
     
     # Create the transfer
     try:
+        # Retrieve the charge to get the balance transaction currency
+        # In test mode, Stripe uses USD for balance transactions regardless of payment currency
+        charge = stripe.Charge.retrieve(charge_id, expand=['balance_transaction'])
+        transfer_currency = charge.balance_transaction.currency
+        
+        # Calculate transfer amount in the balance transaction currency
+        if transfer_currency != 'pkr':
+            # In test mode or when balance currency differs, use balance transaction amount
+            balance_amount = charge.balance_transaction.amount  # in cents
+            # Calculate seller's share (98% of balance amount)
+            transfer_amount_cents = int(balance_amount * 0.98)
+            print(f"Using balance transaction currency: {transfer_currency}, amount: {transfer_amount_cents} cents")
+        else:
+            # In production with PKR, use the calculated PKR amount
+            transfer_amount_cents = int(transfer_amount * 100)
+        
         transfer = stripe.Transfer.create(
-            amount=int(transfer_amount * 100),  # Convert to cents
-            currency='pkr',
+            amount=transfer_amount_cents,
+            currency=transfer_currency,
             destination=seller.stripe_account_id,
             source_transaction=charge_id,
             metadata={
@@ -592,11 +634,13 @@ def create_transfer_for_single_seller_order(payment):
                 'seller_username': seller.username,
                 'payment_id': payment.id,
                 'platform_fee': str(platform_fee),
+                'original_currency': 'pkr',
+                'original_amount': str(transfer_amount),
             },
             description=f"Transfer for order {order.order_number} to {seller.username}"
         )
         
-        print(f"Successfully created transfer {transfer.id} for seller {seller.username}, amount: {transfer_amount}")
+        print(f"Successfully created transfer {transfer.id} for seller {seller.username}, amount: {transfer_amount_cents} {transfer_currency}")
         
         # Create transfer record
         from django.utils import timezone

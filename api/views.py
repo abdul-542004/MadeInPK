@@ -51,6 +51,19 @@ def register(request):
         user = serializer.save()
         token, created = Token.objects.get_or_create(user=user)
         
+        # Create seller profile if user is registering as seller or both
+        if user.role in ['seller', 'both']:
+            SellerProfile.objects.get_or_create(
+                user=user,
+                defaults={
+                    'brand_name': '',
+                    'biography': '',
+                    'business_phone': '',
+                    'website': '',
+                    'social_media_links': {}
+                }
+            )
+        
         # Create welcome notification
         Notification.objects.create(
             user=user,
@@ -829,6 +842,12 @@ class FeedbackViewSet(viewsets.ModelViewSet):
             return Response({'error': 'Order not found or you are not the buyer'}, 
                           status=status.HTTP_400_BAD_REQUEST)
         
+        # Check if it's a cart order (multi-seller)
+        if order.order_type == 'cart' or not order.seller:
+            return Response({
+                'error': 'Feedback for multi-seller cart orders is not supported yet. Please provide feedback for individual sellers through their seller profiles.'
+            }, status=status.HTTP_400_BAD_REQUEST)
+        
         if order.status not in ['shipped', 'delivered']:
             return Response({'error': 'Order must be shipped before feedback'}, 
                           status=status.HTTP_400_BAD_REQUEST)
@@ -1082,7 +1101,8 @@ class ProductReviewViewSet(viewsets.ModelViewSet):
         return ProductReviewSerializer
     
     def perform_create(self, serializer):
-        serializer.save(buyer=self.request.user)
+        # Don't pass buyer here - it's handled in the serializer's create method
+        serializer.save()
     
     def perform_update(self, serializer):
         # Only allow updating own reviews
@@ -1096,6 +1116,108 @@ class ProductReviewViewSet(viewsets.ModelViewSet):
         if instance.buyer != self.request.user:
             raise serializers.ValidationError("You can only delete your own reviews")
         instance.delete()
+    
+    @action(detail=False, methods=['get'], url_path='can-review/(?P<product_id>[^/.]+)')
+    def can_review(self, request, product_id=None):
+        """
+        Check if the authenticated user can review a specific product.
+        Returns:
+        - can_review: boolean
+        - reason: string explaining why they can/cannot review
+        - has_reviewed: boolean if they already reviewed
+        """
+        if not request.user.is_authenticated:
+            return Response({
+                'can_review': False,
+                'reason': 'You must be logged in to review products',
+                'has_reviewed': False
+            })
+        
+        try:
+            product = Product.objects.get(id=product_id)
+        except Product.DoesNotExist:
+            return Response({
+                'can_review': False,
+                'reason': 'Product not found',
+                'has_reviewed': False
+            }, status=status.HTTP_404_NOT_FOUND)
+        
+        # Check if product is an auction (auctions cannot be reviewed)
+        if hasattr(product, 'auction'):
+            return Response({
+                'can_review': False,
+                'reason': 'Auction products cannot be reviewed',
+                'has_reviewed': False
+            })
+        
+        # Check if user is the seller/owner
+        if product.seller == request.user:
+            return Response({
+                'can_review': False,
+                'reason': 'You cannot review your own product',
+                'has_reviewed': False
+            })
+        
+        # Check if user has already reviewed this product
+        existing_review = ProductReview.objects.filter(
+            product=product,
+            buyer=request.user
+        ).first()
+        
+        if existing_review:
+            return Response({
+                'can_review': False,
+                'reason': 'You have already reviewed this product',
+                'has_reviewed': True
+            })
+        
+        # Check if user has purchased and received this product
+        # User must have an order with this product that has been shipped or delivered
+        # Check both direct orders (order.product) and cart orders (order items)
+        from .models import OrderItem
+        
+        # Option 1: Direct order (auction or single fixed-price purchase)
+        direct_orders = Order.objects.filter(
+            buyer=request.user,
+            product=product
+        )
+        
+        # Option 2: Cart order (via order items)
+        cart_order_ids = OrderItem.objects.filter(
+            product=product,
+            order__buyer=request.user
+        ).values_list('order_id', flat=True)
+        
+        cart_orders = Order.objects.filter(id__in=cart_order_ids)
+        
+        # Combine both query sets
+        all_orders = direct_orders | cart_orders
+        
+        has_purchased = all_orders.filter(
+            status__in=['shipped', 'delivered']
+        ).exists()
+        
+        if not has_purchased:
+            # Debug: show what orders exist for this product
+            order_statuses = list(all_orders.values_list('status', flat=True))
+            debug_msg = f'You can only review products you have purchased and received. '
+            if order_statuses:
+                debug_msg += f'Your orders for this product have status: {", ".join(order_statuses)}'
+            else:
+                debug_msg += 'You have not purchased this product.'
+            
+            return Response({
+                'can_review': False,
+                'reason': debug_msg,
+                'has_reviewed': False
+            })
+        
+        # User can review!
+        return Response({
+            'can_review': True,
+            'reason': 'You can review this product',
+            'has_reviewed': False
+        })
 
 
 # Shopping Cart ViewSet
@@ -1334,9 +1456,11 @@ class StripeConnectViewSet(viewsets.ViewSet):
             )
         
         try:
-            base_url = request.build_absolute_uri('/')[:-1]
-            return_url = f"{base_url}/api/stripe/connect/return/"
-            refresh_url = f"{base_url}/api/stripe/connect/refresh/"
+            # Use frontend URL for return/refresh to provide a better user experience
+            from django.conf import settings
+            frontend_url = getattr(settings, 'FRONTEND_URL', 'http://localhost:5173')
+            return_url = f"{frontend_url}/seller/settings?stripe_setup=success"
+            refresh_url = f"{frontend_url}/seller/settings?stripe_setup=refresh"
             
             result = create_stripe_connect_account(user, return_url, refresh_url)
             
@@ -1358,14 +1482,18 @@ class StripeConnectViewSet(viewsets.ViewSet):
         user = request.user
         
         if not user.stripe_account_id:
-            return Response({'error': 'No Stripe account found'}, status=status.HTTP_404_NOT_FOUND)
+            return Response({
+                'has_account': False,
+                'message': 'No Stripe account connected. Please create one to receive payments.'
+            }, status=status.HTTP_404_NOT_FOUND)
         
         try:
             status_info = get_account_status(user.stripe_account_id)
+            status_info['has_account'] = True
             return Response(status_info)
         except Exception as e:
             return Response(
-                {'error': str(e)},
+                {'error': str(e), 'has_account': False},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
     
@@ -1378,9 +1506,11 @@ class StripeConnectViewSet(viewsets.ViewSet):
             return Response({'error': 'No Stripe account found'}, status=status.HTTP_404_NOT_FOUND)
         
         try:
-            base_url = request.build_absolute_uri('/')[:-1]
-            return_url = f"{base_url}/api/stripe/connect/return/"
-            refresh_url = f"{base_url}/api/stripe/connect/refresh/"
+            # Use frontend URL for return/refresh to provide a better user experience
+            from django.conf import settings
+            frontend_url = getattr(settings, 'FRONTEND_URL', 'http://localhost:5173')
+            return_url = f"{frontend_url}/seller/settings?stripe_setup=success"
+            refresh_url = f"{frontend_url}/seller/settings?stripe_setup=refresh"
             
             onboarding_url = create_account_link(user.stripe_account_id, return_url, refresh_url)
             
@@ -1901,17 +2031,14 @@ def seller_earnings(request):
     total_multi = total_multi * Decimal('0.98')
     total_earnings = total_single + total_multi
     
-    # Calculate pending payouts (paid but not yet delivered)
-    pending_single = single_seller_orders.filter(
-        status__in=['paid', 'shipped']
-    ).aggregate(total=Sum('seller_amount'))['total'] or Decimal('0.00')
+    # Calculate pending payouts from SellerTransfer records
+    # Pending transfers are those that haven't been completed yet
+    pending_transfers = SellerTransfer.objects.filter(
+        seller=user,
+        status__in=['pending', 'in_transit']
+    ).aggregate(total=Sum('amount'))['total'] or Decimal('0.00')
     
-    pending_multi = multi_seller_orders.filter(
-        order__status__in=['paid', 'shipped']
-    ).aggregate(total=Sum('subtotal'))['total'] or Decimal('0.00')
-    pending_multi = pending_multi * Decimal('0.98')
-    
-    pending_payouts = pending_single + pending_multi
+    pending_payouts = pending_transfers
     
     # Earnings by month (last 12 months)
     earnings_by_month = []
@@ -2080,7 +2207,7 @@ def get_product_performance_data(user):
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def seller_transactions(request):
-    """Get seller transaction history"""
+    """Get seller transaction history based on SellerTransfer records"""
     from django.db.models import Q
     
     user = request.user
@@ -2098,72 +2225,51 @@ def seller_transactions(request):
     
     transactions = []
     
-    # Get single-seller orders
-    single_orders = Order.objects.filter(
+    # Get all transfers for this seller
+    transfers = SellerTransfer.objects.filter(
         seller=user
-    ).select_related('product').order_by('-created_at')
+    ).select_related('payment', 'payment__order', 'payment__order__product').order_by('-created_at')
     
-    for order in single_orders:
-        # Determine status color
-        if order.status in ['paid', 'shipped']:
-            status_color = 'bg-amber-100 text-amber-700'
-            transaction_status = 'Pending'
-        elif order.status == 'delivered':
+    for transfer in transfers:
+        order = transfer.payment.order
+        
+        # Determine status color based on transfer status
+        if transfer.status == 'succeeded':
             status_color = 'bg-emerald-100 text-emerald-700'
             transaction_status = 'Completed'
-        elif order.status == 'cancelled':
+        elif transfer.status in ['pending', 'in_transit']:
+            status_color = 'bg-amber-100 text-amber-700'
+            transaction_status = 'Pending'
+        elif transfer.status == 'failed':
             status_color = 'bg-red-100 text-red-700'
+            transaction_status = 'Failed'
+        elif transfer.status == 'cancelled':
+            status_color = 'bg-gray-100 text-gray-700'
             transaction_status = 'Cancelled'
         else:
             status_color = 'bg-gray-100 text-gray-700'
-            transaction_status = order.status.replace('_', ' ').title()
+            transaction_status = transfer.status.replace('_', ' ').title()
         
-        # Calculate amount
-        amount = order.seller_amount if order.seller_amount else Decimal('0.00')
-        
-        transactions.append({
-            'id': f'TXN-{order.order_number}',
-            'description': f'Order {order.order_number} - {order.product.name if order.product else "Multiple Items"}',
-            'date': order.paid_at if order.paid_at else order.created_at,
-            'amount': f'+{amount:,.0f}',
-            'status': transaction_status,
-            'status_color': status_color,
-            'order_id': order.id,
-        })
-    
-    # Get multi-seller order items
-    order_items = OrderItem.objects.filter(
-        product__seller=user
-    ).select_related('order', 'product').order_by('-order__created_at')
-    
-    for item in order_items:
-        order = item.order
-        
-        # Determine status color
-        if order.status in ['paid', 'shipped']:
-            status_color = 'bg-amber-100 text-amber-700'
-            transaction_status = 'Pending'
-        elif order.status == 'delivered':
-            status_color = 'bg-emerald-100 text-emerald-700'
-            transaction_status = 'Completed'
-        elif order.status == 'cancelled':
-            status_color = 'bg-red-100 text-red-700'
-            transaction_status = 'Cancelled'
+        # Get product name
+        if order.order_type == 'cart':
+            # For cart orders, check if this is for a specific item
+            order_items = order.items.filter(product__seller=user)
+            if order_items.count() == 1:
+                product_name = order_items.first().product.name
+            else:
+                product_name = f"{order_items.count()} items"
         else:
-            status_color = 'bg-gray-100 text-gray-700'
-            transaction_status = order.status.replace('_', ' ').title()
-        
-        # Calculate amount (subtotal minus platform fee)
-        amount = item.subtotal * Decimal('0.98')
+            product_name = order.product.name if order.product else "Product"
         
         transactions.append({
-            'id': f'TXN-{order.order_number}-{item.id}',
-            'description': f'Order {order.order_number} - {item.product.name}',
-            'date': order.paid_at if order.paid_at else order.created_at,
-            'amount': f'+{amount:,.0f}',
+            'id': transfer.stripe_transfer_id or f'TXN-{order.order_number}',
+            'description': f'Order {order.order_number} - {product_name}',
+            'date': transfer.completed_at if transfer.completed_at else transfer.created_at,
+            'amount': f'+{transfer.amount:,.0f}',
             'status': transaction_status,
             'status_color': status_color,
             'order_id': order.id,
+            'transfer_id': transfer.id,
         })
     
     # Sort by date (newest first)
@@ -2177,6 +2283,12 @@ def seller_transactions(request):
     total = len(transactions)
     transactions = transactions[offset:offset+limit]
     
+    return Response({
+        'transactions': transactions,
+        'total': total,
+        'limit': limit,
+        'offset': offset,
+    })
     return Response({
         'transactions': transactions,
         'total': total,

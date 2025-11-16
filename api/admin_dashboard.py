@@ -12,7 +12,7 @@ import json
 from .models import (
     User, Product, AuctionListing, FixedPriceListing, Order, 
     Payment, Feedback, Category, SellerProfile, ProductReview,
-    OrderItem
+    OrderItem, SellerTransfer
 )
 
 
@@ -46,25 +46,32 @@ def admin_dashboard(request):
     # Order Statistics
     total_orders = Order.objects.count()
     pending_orders = Order.objects.filter(status='pending_payment').count()
-    completed_orders = Order.objects.filter(status='delivered').count()
+    # Use 'shipped' instead of deprecated 'delivered' status
+    completed_orders = Order.objects.filter(status__in=['shipped', 'delivered']).count()
     orders_this_month = Order.objects.filter(created_at__gte=month_ago).count()
     
-    # Revenue Statistics
-    total_revenue = Order.objects.filter(status='delivered').aggregate(
+    # Revenue Statistics - use paid/shipped orders instead of delivered
+    total_revenue = Order.objects.filter(
+        status__in=['paid', 'shipped', 'delivered']
+    ).aggregate(
         total=Sum('total_amount')
     )['total'] or Decimal('0.00')
     
-    platform_fees = Order.objects.filter(status='delivered').aggregate(
+    platform_fees = Order.objects.filter(
+        status__in=['paid', 'shipped', 'delivered']
+    ).aggregate(
         total=Sum('platform_fee')
     )['total'] or Decimal('0.00')
     
     revenue_this_month = Order.objects.filter(
-        status='delivered',
-        delivered_at__gte=month_ago
+        status__in=['paid', 'shipped', 'delivered'],
+        paid_at__gte=month_ago  # Use paid_at instead of delivered_at
     ).aggregate(total=Sum('total_amount'))['total'] or Decimal('0.00')
     
-    # Average Order Value
-    avg_order_value = Order.objects.filter(status='delivered').aggregate(
+    # Average Order Value - use completed orders (paid/shipped)
+    avg_order_value = Order.objects.filter(
+        status__in=['paid', 'shipped', 'delivered']
+    ).aggregate(
         avg=Avg('total_amount')
     )['avg'] or Decimal('0.00')
     
@@ -76,6 +83,14 @@ def admin_dashboard(request):
     avg_seller_rating = Feedback.objects.aggregate(avg=Avg('seller_rating'))['avg'] or 0
     avg_platform_rating = Feedback.objects.aggregate(avg=Avg('platform_rating'))['avg'] or 0
     total_feedbacks = Feedback.objects.count()
+    
+    # Transfer Statistics
+    total_transfers = SellerTransfer.objects.filter(status='succeeded').count()
+    total_transferred_amount = SellerTransfer.objects.filter(
+        status='succeeded'
+    ).aggregate(total=Sum('amount'))['total'] or Decimal('0.00')
+    pending_transfers = SellerTransfer.objects.filter(status='pending').count()
+    failed_transfers = SellerTransfer.objects.filter(status='failed').count()
     
     # ==================== CHARTS DATA ====================
     
@@ -92,9 +107,9 @@ def admin_dashboard(request):
         day_end = day_start + timedelta(days=1)
         
         daily_revenue = Order.objects.filter(
-            status='delivered',
-            delivered_at__gte=day_start,
-            delivered_at__lt=day_end
+            status__in=['paid', 'shipped', 'delivered'],
+            paid_at__gte=day_start,
+            paid_at__lt=day_end
         ).aggregate(total=Sum('total_amount'))['total'] or Decimal('0.00')
         
         revenue_trend.append({
@@ -125,17 +140,20 @@ def admin_dashboard(request):
     ).order_by('-product_count')[:10].values('name', 'product_count'))
     
     # 5. Best Selling Products (Top 10)
+    # For single-seller orders, count from orders. For cart orders, count from OrderItems
     best_selling_products = list(Product.objects.annotate(
-        total_sold=Count('orders', filter=Q(orders__status='delivered'))
+        total_sold=Count('orders', filter=Q(orders__status__in=['paid', 'shipped', 'delivered'])) +
+                   Count('order_items', filter=Q(order_items__order__status__in=['paid', 'shipped', 'delivered']))
     ).filter(total_sold__gt=0).order_by('-total_sold')[:10].values(
         'id', 'name', 'total_sold', 'seller__username'
     ))
     
     # 6. Top Sellers by Revenue
+    # Calculate from both single-seller orders and seller transfers for cart orders
     top_sellers = list(User.objects.filter(
         Q(role='seller') | Q(role='both')
     ).annotate(
-        total_revenue=Sum('sales__total_amount', filter=Q(sales__status='delivered'))
+        total_revenue=Sum('sales__total_amount', filter=Q(sales__status__in=['paid', 'shipped', 'delivered']))
     ).filter(total_revenue__gt=0).order_by('-total_revenue')[:10].values(
         'id', 'username', 'email', 'total_revenue'
     ))
@@ -219,6 +237,20 @@ def admin_dashboard(request):
             'message': f'{paid_not_shipped} paid orders awaiting shipment'
         })
     
+    # Check for failed transfers
+    if failed_transfers > 0:
+        alerts.append({
+            'type': 'danger',
+            'message': f'{failed_transfers} seller transfers failed - requires attention!'
+        })
+    
+    # Check for pending transfers
+    if pending_transfers > 0:
+        alerts.append({
+            'type': 'warning',
+            'message': f'{pending_transfers} seller transfers pending'
+        })
+    
     context = {
         # Overview Stats
         'total_users': total_users,
@@ -249,6 +281,11 @@ def admin_dashboard(request):
         'avg_seller_rating': avg_seller_rating,
         'avg_platform_rating': avg_platform_rating,
         'total_feedbacks': total_feedbacks,
+        
+        'total_transfers': total_transfers,
+        'total_transferred_amount': total_transferred_amount,
+        'pending_transfers': pending_transfers,
+        'failed_transfers': failed_transfers,
         
         # Charts Data (as JSON)
         'orders_by_status_json': json.dumps(orders_by_status),

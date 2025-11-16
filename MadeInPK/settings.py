@@ -171,6 +171,8 @@ REST_FRAMEWORK = {
 }
 
 # CORS Settings for React Frontend
+FRONTEND_URL = os.getenv('FRONTEND_URL', 'http://localhost:5173')  # Frontend URL for redirects
+
 CORS_ALLOWED_ORIGINS = [
     'http://localhost:3000',  # React dev server
     'http://localhost:5173',  # Vite dev server

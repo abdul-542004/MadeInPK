@@ -253,9 +253,21 @@
             <div class="stat-value">{{ completed_orders|default:"0" }}</div>
         </div>
         
+        <div class="stat-card green">
+            <div class="stat-label">Successful Transfers</div>
+            <div class="stat-value">{{ total_transfers|default:"0" }}</div>
+            <div class="stat-change">Rs {{ total_transferred_amount|floatformat:2 }} transferred</div>
+        </div>
+        
         <div class="stat-card orange">
             <div class="stat-label">Pending Payments</div>
             <div class="stat-value">{{ pending_orders|default:"0" }}</div>
+        </div>
+        
+        <div class="stat-card {% if failed_transfers > 0 %}red{% else %}green{% endif %}">
+            <div class="stat-label">Failed Transfers</div>
+            <div class="stat-value">{{ failed_transfers|default:"0" }}</div>
+            {% if failed_transfers > 0 %}<div class="stat-change negative">Requires attention!</div>{% endif %}
         </div>
         
         <div class="stat-card {% if blocked_users > 0 %}red{% else %}green{% endif %}">
