@@ -373,6 +373,31 @@ class Order(models.Model):
         elif self.seller:
             return [self.seller]
         return []
+    
+    def check_and_update_shipping_status(self):
+        """Check if all items are shipped and update order status accordingly"""
+        if self.is_multi_seller():
+            # For multi-seller orders, check if all items are shipped
+            all_items_shipped = not self.items.filter(is_shipped=False).exists()
+            if all_items_shipped and self.status == 'paid':
+                self.status = 'shipped'
+                self.shipped_at = timezone.now()
+                self.save()
+                
+                # Notify buyer
+                Notification.objects.create(
+                    user=self.buyer,
+                    notification_type='order_shipped',
+                    title='All items have been shipped',
+                    message=f'All items in order {self.order_number} have been shipped by sellers',
+                    order=self
+                )
+                return True
+        return False
+    
+    def get_seller_items(self, seller):
+        """Get all order items for a specific seller"""
+        return self.items.filter(product__seller=seller)
 
 
 # Payment Model
@@ -715,6 +740,8 @@ class OrderItem(models.Model):
     quantity = models.IntegerField(validators=[MinValueValidator(1)])
     unit_price = models.DecimalField(max_digits=10, decimal_places=2)  # Price at time of purchase
     subtotal = models.DecimalField(max_digits=10, decimal_places=2)  # quantity * unit_price
+    is_shipped = models.BooleanField(default=False)  # Track if this item has been shipped by seller
+    shipped_at = models.DateTimeField(null=True, blank=True)  # When seller marked as shipped
     created_at = models.DateTimeField(auto_now_add=True)
     
     class Meta:
@@ -728,3 +755,7 @@ class OrderItem(models.Model):
         # Auto-calculate subtotal
         self.subtotal = self.unit_price * self.quantity
         super().save(*args, **kwargs)
+    
+    def get_seller(self):
+        """Get the seller for this order item"""
+        return self.product.seller

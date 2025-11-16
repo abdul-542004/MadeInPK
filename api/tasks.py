@@ -38,6 +38,12 @@ def check_auction_endings():
             platform_fee = total_amount * Decimal(str(settings.STRIPE_PLATFORM_FEE_PERCENTAGE))
             seller_amount = total_amount - platform_fee
             
+            # Get buyer's default shipping address
+            default_address = winning_bid.bidder.addresses.filter(is_default=True).first()
+            if not default_address:
+                # Use any address if no default
+                default_address = winning_bid.bidder.addresses.first()
+            
             order = Order.objects.create(
                 order_number=f"AUC-{uuid.uuid4().hex[:12].upper()}",
                 buyer=winning_bid.bidder,
@@ -50,17 +56,40 @@ def check_auction_endings():
                 total_amount=total_amount,
                 platform_fee=platform_fee,
                 seller_amount=seller_amount,
-                shipping_address=winning_bid.bidder.addresses.filter(is_default=True).first(),
+                shipping_address=default_address,
                 status='pending_payment',
                 payment_deadline=now + timedelta(hours=settings.PAYMENT_DEADLINE_HOURS)
             )
+            
+            # Create Stripe payment URL
+            try:
+                from .stripe_utils import create_payment_intent_for_order
+                import os
+                
+                base_url = os.getenv('BACKEND_URL', 'http://localhost:8000')
+                frontend_url = os.getenv('FRONTEND_URL', 'http://localhost:5173')
+                
+                payment_result = create_payment_intent_for_order(
+                    order=order,
+                    success_url=f"{base_url}/api/payments/success/?order_id={order.id}",
+                    cancel_url=f"{frontend_url}/auctions/{auction.id}?payment_cancelled=true"
+                )
+                
+                order.payment_url = payment_result['checkout_url']
+                if payment_result.get('session_id'):
+                    order.stripe_payment_intent_id = payment_result['session_id']
+                order.save()
+            except Exception as e:
+                print(f"Failed to create payment URL for auction order {order.id}: {str(e)}")
+                order.payment_url = f"{frontend_url}/orders/{order.id}/payment"
+                order.save()
             
             # Create notification for winner
             notification = Notification.objects.create(
                 user=winning_bid.bidder,
                 notification_type='auction_won',
                 title='Congratulations! You won the auction',
-                message=f'You won the auction for {auction.product.name}. Please complete payment within 24 hours.',
+                message=f'You won the auction for {auction.product.name}. Please complete payment within 24 hours: {order.payment_url}',
                 auction=auction,
                 order=order
             )

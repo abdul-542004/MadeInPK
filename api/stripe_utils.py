@@ -98,10 +98,10 @@ def get_account_status(account_id):
 
 def create_payment_intent_for_order(order, success_url, cancel_url):
     """
-    Create a Stripe Payment Intent for an order
+    Create a Stripe Checkout Session for an order
     
     For single-seller orders: Use destination charges
-    For multi-seller orders: Use separate charges with application fee
+    For multi-seller orders: Create regular payment, handle transfers after payment succeeds
     
     Args:
         order: Order instance
@@ -109,19 +109,23 @@ def create_payment_intent_for_order(order, success_url, cancel_url):
         cancel_url: URL to redirect if payment is cancelled
     
     Returns:
-        Payment Intent object with client_secret and checkout URL
+        dict with payment_intent_id, client_secret, and checkout_url
     """
     try:
         # Convert total amount to cents (Stripe uses smallest currency unit)
+        # Note: PKR is a zero-decimal currency, but Stripe treats it as having decimals
         amount_cents = int(order.total_amount * 100)
         
         # Metadata for the payment
         metadata = {
-            'order_id': order.id,
+            'order_id': str(order.id),
             'order_number': order.order_number,
-            'buyer_id': order.buyer.id,
+            'buyer_id': str(order.buyer.id),
             'order_type': order.order_type,
         }
+        
+        # Line items for checkout
+        line_items = []
         
         # For single-seller orders (auction or direct fixed-price)
         if order.order_type in ['auction', 'fixed_price'] and order.seller:
@@ -129,78 +133,85 @@ def create_payment_intent_for_order(order, success_url, cancel_url):
             if not order.seller.stripe_account_id:
                 raise Exception(f"Seller {order.seller.username} has not connected their Stripe account")
             
-            # Calculate application fee (platform commission)
+            metadata['seller_id'] = str(order.seller.id)
+            
+            # Create line item
+            line_items.append({
+                'price_data': {
+                    'currency': 'pkr',
+                    'product_data': {
+                        'name': order.product.name if order.product else f"Order {order.order_number}",
+                        'description': order.product.description if order.product else "Product order",
+                    },
+                    'unit_amount': amount_cents,
+                },
+                'quantity': 1,
+            })
+            
+            # Calculate application fee (platform commission) in cents
             application_fee_cents = int(order.platform_fee * 100)
             
-            metadata['seller_id'] = order.seller.id
-            
-            # Create payment intent with destination charge
-            payment_intent = stripe.PaymentIntent.create(
-                amount=amount_cents,
-                currency='pkr',  # Pakistani Rupee
-                application_fee_amount=application_fee_cents,
-                transfer_data={
-                    'destination': order.seller.stripe_account_id,
-                },
+            # Create checkout session with destination charge
+            checkout_session = stripe.checkout.Session.create(
+                payment_method_types=['card'],
+                line_items=line_items,
+                mode='payment',
+                success_url=success_url,
+                cancel_url=cancel_url,
                 metadata=metadata,
-                description=f"Order {order.order_number} - {order.product.name}",
+                payment_intent_data={
+                    'application_fee_amount': application_fee_cents,
+                    'transfer_data': {
+                        'destination': order.seller.stripe_account_id,
+                    },
+                    'metadata': metadata,
+                },
             )
         
         # For multi-seller orders (cart checkout)
         elif order.order_type == 'cart':
             # For cart orders, we'll handle transfers separately after payment
-            # Just create a regular payment intent
-            payment_intent = stripe.PaymentIntent.create(
-                amount=amount_cents,
-                currency='pkr',
+            # Create line item
+            line_items.append({
+                'price_data': {
+                    'currency': 'pkr',
+                    'product_data': {
+                        'name': f"Order {order.order_number}",
+                        'description': "Multi-product order",
+                    },
+                    'unit_amount': amount_cents,
+                },
+                'quantity': 1,
+            })
+            
+            # Create checkout session for cart order (no destination charge)
+            checkout_session = stripe.checkout.Session.create(
+                payment_method_types=['card'],
+                line_items=line_items,
+                mode='payment',
+                success_url=success_url,
+                cancel_url=cancel_url,
                 metadata=metadata,
-                description=f"Order {order.order_number} - Multi-product order",
+                payment_intent_data={
+                    'metadata': metadata,
+                },
             )
         
         else:
             raise Exception("Invalid order type or missing seller information")
         
-        # Create or update Payment record
-        payment, created = Payment.objects.update_or_create(
-            order=order,
-            defaults={
-                'stripe_payment_intent_id': payment_intent.id,
-                'amount': order.total_amount,
-                'status': 'pending',
-            }
-        )
-        
-        # Store payment intent ID in order
-        order.stripe_payment_intent_id = payment_intent.id
+        # Store the checkout session ID for later reference
+        # The payment_intent is created when customer begins checkout
+        order.stripe_payment_intent_id = checkout_session.id  # Store session ID temporarily
         order.save()
         
-        # Create checkout session for hosted payment page
-        checkout_session = stripe.checkout.Session.create(
-            payment_method_types=['card'],
-            line_items=[{
-                'price_data': {
-                    'currency': 'pkr',
-                    'product_data': {
-                        'name': f"Order {order.order_number}",
-                        'description': f"{order.get_order_type_display()} order",
-                    },
-                    'unit_amount': amount_cents,
-                },
-                'quantity': 1,
-            }],
-            mode='payment',
-            success_url=success_url,
-            cancel_url=cancel_url,
-            payment_intent_data={
-                'metadata': metadata,
-            } if order.order_type == 'cart' else None,
-            metadata=metadata,
-        )
+        # Note: We'll update with actual payment_intent_id when webhook receives checkout.session.completed
         
         return {
-            'payment_intent_id': payment_intent.id,
-            'client_secret': payment_intent.client_secret,
+            'payment_intent_id': None,  # Will be set via webhook
+            'client_secret': None,  # Not needed for checkout session
             'checkout_url': checkout_session.url,
+            'session_id': checkout_session.id,
         }
     
     except stripe.error.StripeError as e:
@@ -293,13 +304,22 @@ def handle_payment_intent_succeeded(payment_intent):
     """
     Handle successful payment intent
     Updates order and payment status, creates transfers if needed
+    Idempotent - can be called multiple times safely
     """
     from django.utils import timezone
     
     try:
+        # Payment intent can be either a string ID or object
+        payment_intent_id = payment_intent if isinstance(payment_intent, str) else payment_intent.id
+        
         # Get payment by payment intent ID
-        payment = Payment.objects.get(stripe_payment_intent_id=payment_intent.id)
+        payment = Payment.objects.get(stripe_payment_intent_id=payment_intent_id)
         order = payment.order
+        
+        # Check if already processed - make this idempotent
+        if payment.status == 'succeeded' and order.status == 'paid':
+            print(f"Payment {payment_intent_id} already processed, skipping notifications")
+            return True
         
         # Update payment status
         payment.status = 'succeeded'
@@ -315,30 +335,45 @@ def handle_payment_intent_succeeded(payment_intent):
         if order.order_type == 'cart':
             create_transfers_for_cart_order(payment)
         
-        # Send notification to buyer
+        # Send notification to buyer (only once)
         from .models import Notification
-        Notification.objects.create(
+        # Check if notification already exists to prevent duplicates
+        if not Notification.objects.filter(
             user=order.buyer,
             notification_type='payment_received',
-            title='Payment Successful',
-            message=f'Your payment for order {order.order_number} has been received.',
             order=order
-        )
-        
-        # Notify seller(s)
-        sellers = order.get_sellers()
-        for seller in sellers:
+        ).exists():
             Notification.objects.create(
-                user=seller,
+                user=order.buyer,
                 notification_type='payment_received',
-                title='Payment Received',
-                message=f'Payment received for order {order.order_number}.',
+                title='Payment Successful',
+                message=f'Your payment for order {order.order_number} has been received.',
                 order=order
             )
+        
+        # Notify seller(s) (only once per seller)
+        sellers = order.get_sellers()
+        for seller in sellers:
+            if not Notification.objects.filter(
+                user=seller,
+                notification_type='payment_received',
+                order=order
+            ).exists():
+                Notification.objects.create(
+                    user=seller,
+                    notification_type='payment_received',
+                    title='Payment Received',
+                    message=f'Payment received for order {order.order_number}.',
+                    order=order
+                )
         
         return True
     
     except Payment.DoesNotExist:
+        print(f"Payment not found for intent: {payment_intent_id}")
+        return False
+    except Exception as e:
+        print(f"Error handling payment success: {str(e)}")
         return False
 
 
@@ -347,9 +382,13 @@ def handle_payment_intent_failed(payment_intent):
     Handle failed payment intent
     """
     from django.utils import timezone
+    from django.conf import settings
     
     try:
-        payment = Payment.objects.get(stripe_payment_intent_id=payment_intent.id)
+        # Payment intent can be either a string ID or object
+        payment_intent_id = payment_intent if isinstance(payment_intent, str) else payment_intent.id
+        
+        payment = Payment.objects.get(stripe_payment_intent_id=payment_intent_id)
         order = payment.order
         
         # Update payment status
@@ -365,7 +404,8 @@ def handle_payment_intent_failed(payment_intent):
         buyer.failed_payment_count += 1
         
         # Block user if too many failed payments
-        if buyer.failed_payment_count >= settings.MAX_FAILED_PAYMENTS_BEFORE_BLOCK:
+        max_failures = getattr(settings, 'MAX_FAILED_PAYMENTS_BEFORE_BLOCK', 3)
+        if buyer.failed_payment_count >= max_failures:
             buyer.is_blocked = True
             
             # Notify user about blocking
@@ -393,4 +433,8 @@ def handle_payment_intent_failed(payment_intent):
         return True
     
     except Payment.DoesNotExist:
+        print(f"Payment not found for intent: {payment_intent_id}")
+        return False
+    except Exception as e:
+        print(f"Error handling payment failure: {str(e)}")
         return False

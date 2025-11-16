@@ -286,16 +286,26 @@ class BidSerializer(serializers.ModelSerializer):
 class AuctionListingSerializer(serializers.ModelSerializer):
     product = ProductSerializer(read_only=True)
     winner_username = serializers.CharField(source='winner.username', read_only=True)
+    winner_email = serializers.SerializerMethodField()
     latest_bids = serializers.SerializerMethodField()
     total_bids = serializers.SerializerMethodField()
     time_remaining = serializers.SerializerMethodField()
+    winning_bid_amount = serializers.SerializerMethodField()
+    order_info = serializers.SerializerMethodField()
     
     class Meta:
         model = AuctionListing
         fields = ['id', 'product', 'starting_price', 'current_price',
-                  'start_time', 'end_time', 'status', 'winner', 'winner_username',
-                  'latest_bids', 'total_bids', 'time_remaining', 'created_at']
+                  'start_time', 'end_time', 'status', 'winner', 'winner_username', 'winner_email',
+                  'latest_bids', 'total_bids', 'time_remaining', 'winning_bid_amount', 'order_info', 'created_at']
         read_only_fields = ['current_price', 'status', 'winner', 'created_at']
+    
+    def get_winner_email(self, obj):
+        """Only show winner email to the seller"""
+        request = self.context.get('request')
+        if obj.winner and request and obj.product.seller == request.user:
+            return obj.winner.email
+        return None
     
     def get_latest_bids(self, obj):
         bids = obj.bids.select_related('bidder').order_by('-bid_time')[:5]
@@ -310,6 +320,31 @@ class AuctionListingSerializer(serializers.ModelSerializer):
             remaining = obj.end_time - timezone.now()
             return remaining.total_seconds()
         return 0
+    
+    def get_winning_bid_amount(self, obj):
+        """Get the winning bid amount"""
+        if obj.winner:
+            winning_bid = obj.bids.filter(bidder=obj.winner, is_winning=True).first()
+            if winning_bid:
+                return str(winning_bid.amount)
+        return None
+    
+    def get_order_info(self, obj):
+        """Get order info for seller if auction ended"""
+        request = self.context.get('request')
+        if obj.status in ['ended', 'completed'] and request and obj.product.seller == request.user:
+            order = obj.orders.first()
+            if order:
+                return {
+                    'order_id': order.id,
+                    'order_number': order.order_number,
+                    'status': order.status,
+                    'payment_url': order.payment_url,
+                    'total_amount': str(order.total_amount),
+                    'seller_amount': str(order.seller_amount),
+                    'payment_deadline': order.payment_deadline,
+                }
+        return None
 
 
 class AuctionCreateSerializer(serializers.ModelSerializer):
@@ -921,22 +956,38 @@ class OrderItemSerializer(serializers.ModelSerializer):
     product_name = serializers.CharField(source='product.name', read_only=True)
     seller_id = serializers.IntegerField(source='product.seller.id', read_only=True)
     seller_username = serializers.CharField(source='product.seller.username', read_only=True)
+    is_shipped = serializers.BooleanField(read_only=True)
+    shipped_at = serializers.DateTimeField(read_only=True)
+    product_image = serializers.SerializerMethodField()
     
     class Meta:
         model = OrderItem
-        fields = ['id', 'product', 'product_name', 'seller_id', 'seller_username',
-                  'quantity', 'unit_price', 'subtotal', 'created_at']
+        fields = ['id', 'product', 'product_name', 'product_image', 'seller_id', 'seller_username',
+                  'quantity', 'unit_price', 'subtotal', 'is_shipped', 'shipped_at', 'created_at']
         read_only_fields = ['subtotal', 'created_at']
+    
+    def get_product_image(self, obj):
+        """Get primary product image"""
+        request = self.context.get('request')
+        primary_image = obj.product.images.filter(is_primary=True).first()
+        if not primary_image:
+            primary_image = obj.product.images.first()
+        if primary_image and primary_image.image and request:
+            return request.build_absolute_uri(primary_image.image.url)
+        return None
 
 
 # Updated Order Serializer to support multi-product orders
 class OrderSerializer(serializers.ModelSerializer):
     buyer_username = serializers.CharField(source='buyer.username', read_only=True)
     seller_username = serializers.CharField(source='seller.username', read_only=True)
-    product_name = serializers.CharField(source='product.name', read_only=True)
+    product_name = serializers.SerializerMethodField()  # Handle both single and multi-seller orders
     shipping_address_detail = AddressSerializer(source='shipping_address', read_only=True)
-    items = OrderItemSerializer(many=True, read_only=True)  # For cart orders
+    items = serializers.SerializerMethodField()  # Filter items based on viewer
     is_multi_seller = serializers.SerializerMethodField()
+    my_items_shipped = serializers.SerializerMethodField()
+    all_items_shipped = serializers.SerializerMethodField()
+    seller_amount = serializers.SerializerMethodField()  # Calculate for multi-seller orders
     
     class Meta:
         model = Order
@@ -945,15 +996,79 @@ class OrderSerializer(serializers.ModelSerializer):
                   'quantity', 'unit_price', 'total_amount', 'platform_fee',
                   'seller_amount', 'shipping_address', 'shipping_address_detail',
                   'status', 'payment_url', 'payment_deadline', 'items',
-                  'is_multi_seller', 'stripe_payment_intent_id',
+                  'is_multi_seller', 'my_items_shipped', 'all_items_shipped', 'stripe_payment_intent_id',
                   'created_at', 'paid_at', 'shipped_at', 'delivered_at']
         read_only_fields = ['order_number', 'buyer', 'seller', 'platform_fee',
-                           'seller_amount', 'status', 'stripe_payment_intent_id',
+                           'status', 'stripe_payment_intent_id',
                            'created_at', 'paid_at', 'shipped_at', 'delivered_at']
     
     def get_is_multi_seller(self, obj):
         """Check if order involves multiple sellers"""
         return obj.is_multi_seller()
+    
+    def get_product_name(self, obj):
+        """Get product name - for single orders use product.name, for multi-seller return None"""
+        if obj.product:
+            return obj.product.name
+        return None  # Multi-seller orders don't have a single product name
+    
+    def get_seller_amount(self, obj):
+        """Calculate seller amount - for single-seller use model field, for multi-seller calculate from items"""
+        request = self.context.get('request')
+        
+        if obj.is_multi_seller():
+            # For multi-seller orders, calculate from the current user's items
+            if request and request.user.is_authenticated and request.user != obj.buyer:
+                # This is a seller viewing the order
+                from decimal import Decimal
+                seller_items = obj.items.filter(product__seller=request.user)
+                if seller_items.exists():
+                    # Calculate total from this seller's items
+                    subtotal = sum(item.subtotal for item in seller_items)
+                    # Deduct 2% platform fee
+                    seller_earnings = subtotal * Decimal('0.98')
+                    return str(seller_earnings)
+            return None  # Buyer or unauthenticated user
+        else:
+            # Single-seller order - use the model field
+            return str(obj.seller_amount) if obj.seller_amount else None
+    
+    def get_items(self, obj):
+        """Get order items - filter to show only relevant items for sellers"""
+        request = self.context.get('request')
+        if not obj.is_multi_seller():
+            return []
+        
+        items = obj.items.all()
+        
+        # If viewer is a seller (not the buyer), only show their own items
+        if request and request.user.is_authenticated:
+            if request.user != obj.buyer:
+                # This is a seller viewing the order - show only their items
+                items = items.filter(product__seller=request.user)
+        
+        return OrderItemSerializer(items, many=True, context=self.context).data
+    
+    def get_my_items_shipped(self, obj):
+        """Check if current user's items are shipped (for sellers in multi-seller orders)"""
+        request = self.context.get('request')
+        if not obj.is_multi_seller() or not request or not request.user.is_authenticated:
+            return None
+        
+        if request.user == obj.buyer:
+            return None  # Not applicable for buyers
+        
+        # Check if this seller's items are all shipped
+        seller_items = obj.items.filter(product__seller=request.user)
+        if seller_items.exists():
+            return not seller_items.filter(is_shipped=False).exists()
+        return None
+    
+    def get_all_items_shipped(self, obj):
+        """Check if all items in a multi-seller order are shipped"""
+        if not obj.is_multi_seller():
+            return None
+        return not obj.items.filter(is_shipped=False).exists()
 
 
 # Cart Checkout Serializer

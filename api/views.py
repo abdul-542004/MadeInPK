@@ -10,6 +10,7 @@ from django.utils import timezone
 from decimal import Decimal
 from dateutil import parser
 import uuid
+import os
 
 from .models import (
     Province, City, Address, Category, Product, ProductImage,
@@ -673,19 +674,55 @@ class OrderViewSet(viewsets.ReadOnlyModelViewSet):
     def mark_shipped(self, request, pk=None):
         """Mark order as shipped (seller only)
         For single-seller orders: marks entire order as shipped
-        For multi-seller orders: this endpoint is not applicable (not implemented yet)
+        For multi-seller orders: marks seller's items as shipped
         """
         order = self.get_object()
+        user = request.user
         
         # Check if this is a multi-seller order
         if order.is_multi_seller():
+            # Get items belonging to this seller
+            seller_items = order.items.filter(product__seller=user)
+            
+            if not seller_items.exists():
+                return Response({
+                    'error': 'You have no items in this order'
+                }, status=status.HTTP_403_FORBIDDEN)
+            
+            if order.status != 'paid':
+                return Response({
+                    'error': 'Order must be paid first'
+                }, status=status.HTTP_400_BAD_REQUEST)
+            
+            # Check if items are already shipped
+            already_shipped = seller_items.filter(is_shipped=True).exists()
+            if already_shipped:
+                return Response({
+                    'error': 'Your items have already been marked as shipped'
+                }, status=status.HTTP_400_BAD_REQUEST)
+            
+            # Mark all seller's items as shipped
+            seller_items.update(is_shipped=True, shipped_at=timezone.now())
+            
+            # Notify buyer about this seller's shipment
+            Notification.objects.create(
+                user=order.buyer,
+                notification_type='order_shipped',
+                title='Items shipped',
+                message=f'{user.username} has shipped their items from order {order.order_number}',
+                order=order
+            )
+            
+            # Check if all items are now shipped
+            order.check_and_update_shipping_status()
+            
             return Response({
-                'error': 'Multi-seller cart orders cannot be marked as shipped directly. '
-                        'Each seller must ship their items individually.'
-            }, status=status.HTTP_400_BAD_REQUEST)
+                'message': 'Your items marked as shipped',
+                'all_items_shipped': not order.items.filter(is_shipped=False).exists()
+            })
         
         # Single-seller order validation
-        if order.seller != request.user:
+        if order.seller != user:
             return Response({'error': 'Only seller can mark as shipped'}, 
                           status=status.HTTP_403_FORBIDDEN)
         
@@ -1161,7 +1198,22 @@ class CartViewSet(viewsets.ViewSet):
         
         cart = request.user.cart
         shipping_address_id = serializer.validated_data['shipping_address_id']
-        shipping_address = Address.objects.get(id=shipping_address_id)
+        
+        # Validate shipping address
+        try:
+            shipping_address = Address.objects.get(id=shipping_address_id, user=request.user)
+        except Address.DoesNotExist:
+            return Response(
+                {'error': 'Invalid shipping address'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Check if cart is empty
+        if not cart.items.exists():
+            return Response(
+                {'error': 'Cart is empty'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
         
         # Calculate total amounts
         total_amount = cart.get_total_price()
@@ -1180,7 +1232,17 @@ class CartViewSet(viewsets.ViewSet):
         )
         
         # Create order items from cart items
-        for cart_item in cart.items.all():
+        cart_items_to_process = list(cart.items.select_related('listing__product').all())
+        
+        for cart_item in cart_items_to_process:
+            # Verify availability
+            if not cart_item.is_available():
+                order.delete()
+                return Response(
+                    {'error': f'{cart_item.listing.product.name} is no longer available in the requested quantity'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
             OrderItem.objects.create(
                 order=order,
                 product=cart_item.listing.product,
@@ -1192,20 +1254,40 @@ class CartViewSet(viewsets.ViewSet):
             # Reduce listing quantity
             cart_item.listing.reduce_quantity(cart_item.quantity)
         
-        # Create Stripe payment intent
+        # Create Stripe payment checkout session
         try:
             base_url = request.build_absolute_uri('/')[:-1]
+            # Use frontend URL for success/cancel if available
+            frontend_url = os.getenv('FRONTEND_URL', 'http://localhost:5173')
+            
+            # Success URL will have session_id appended by Stripe automatically
             payment_result = create_payment_intent_for_order(
                 order=order,
                 success_url=f"{base_url}/api/payments/success/?order_id={order.id}",
-                cancel_url=f"{base_url}/api/payments/cancel/?order_id={order.id}"
+                cancel_url=f"{frontend_url}/checkout?cancelled=true"
             )
             
             order.payment_url = payment_result['checkout_url']
+            if payment_result.get('session_id'):
+                # Store session ID temporarily
+                order.stripe_payment_intent_id = payment_result['session_id']
             order.save()
             
         except Exception as e:
-            order.delete()  # Rollback order creation
+            # Rollback: restore inventory and delete order
+            import traceback
+            print(f"Payment creation failed: {str(e)}")
+            print(traceback.format_exc())
+            
+            for item in order.items.all():
+                if item.listing:
+                    # Restore quantity
+                    item.listing.quantity += item.quantity
+                    if item.listing.status == 'out_of_stock':
+                        item.listing.status = 'active'
+                    item.listing.save()
+            
+            order.delete()
             return Response(
                 {'error': f'Payment creation failed: {str(e)}'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
@@ -1356,6 +1438,44 @@ def stripe_webhook(request):
         payment_intent = event['data']['object']
         handle_payment_intent_failed(payment_intent)
     
+    elif event['type'] == 'checkout.session.completed':
+        # Handle successful checkout session
+        session = event['data']['object']
+        payment_intent_id = session.get('payment_intent')
+        session_id = session.get('id')
+        
+        print(f"Checkout session completed: {session_id}, Payment Intent: {payment_intent_id}")
+        
+        if payment_intent_id and session_id:
+            try:
+                # Find order by session ID (we stored it temporarily in stripe_payment_intent_id)
+                order = Order.objects.filter(stripe_payment_intent_id=session_id).first()
+                
+                if order:
+                    # Update order with actual payment intent ID
+                    order.stripe_payment_intent_id = payment_intent_id
+                    order.save()
+                    
+                    # Create Payment record
+                    Payment.objects.get_or_create(
+                        order=order,
+                        defaults={
+                            'stripe_payment_intent_id': payment_intent_id,
+                            'amount': order.total_amount,
+                            'status': 'pending',
+                        }
+                    )
+                    
+                    print(f"Updated order {order.order_number} with payment intent {payment_intent_id}")
+                
+                # Retrieve the full payment intent and handle success
+                payment_intent = stripe.PaymentIntent.retrieve(payment_intent_id)
+                handle_payment_intent_succeeded(payment_intent)
+            except stripe.error.StripeError as e:
+                print(f"Error retrieving payment intent: {e}")
+            except Exception as e:
+                print(f"Error handling checkout session: {e}")
+    
     elif event['type'] == 'account.updated':
         account = event['data']['object']
         # Update seller account status if needed
@@ -1370,22 +1490,62 @@ def stripe_webhook(request):
 
 # Payment success and cancel pages
 @api_view(['GET'])
-@permission_classes([IsAuthenticated])
+@permission_classes([AllowAny])  # Changed to AllowAny since Stripe redirects here
 def payment_success(request):
-    """Payment success page"""
+    """Payment success page - verify payment and redirect to frontend"""
+    import stripe
+    from django.shortcuts import redirect
+    from .stripe_utils import handle_payment_intent_succeeded
+    
     order_id = request.query_params.get('order_id')
+    session_id = request.query_params.get('session_id')  # Stripe adds this automatically
     
-    if order_id:
+    frontend_url = os.getenv('FRONTEND_URL', 'http://localhost:5173')
+    
+    if order_id and session_id:
         try:
-            order = Order.objects.get(id=order_id, buyer=request.user)
-            return Response({
-                'message': 'Payment successful',
-                'order': OrderSerializer(order).data
-            })
+            order = Order.objects.get(id=order_id)
+            
+            # If order is still pending, verify with Stripe
+            if order.status == 'pending_payment':
+                try:
+                    # Retrieve the checkout session from Stripe
+                    checkout_session = stripe.checkout.Session.retrieve(session_id)
+                    
+                    if checkout_session.payment_status == 'paid':
+                        payment_intent_id = checkout_session.payment_intent
+                        
+                        # Update order with payment intent ID
+                        order.stripe_payment_intent_id = payment_intent_id
+                        order.save()
+                        
+                        # Create/update payment record
+                        Payment.objects.get_or_create(
+                            order=order,
+                            defaults={
+                                'stripe_payment_intent_id': payment_intent_id,
+                                'amount': order.total_amount,
+                                'status': 'pending',
+                            }
+                        )
+                        
+                        # Handle payment success
+                        payment_intent = stripe.PaymentIntent.retrieve(payment_intent_id)
+                        handle_payment_intent_succeeded(payment_intent)
+                        
+                        print(f"Payment verified for order {order.order_number}")
+                    
+                except stripe.error.StripeError as e:
+                    print(f"Error verifying payment: {e}")
+            
+            # Redirect to frontend success page
+            return redirect(f"{frontend_url}/order-success?order_id={order.id}")
+            
         except Order.DoesNotExist:
-            pass
+            return redirect(f"{frontend_url}/order-success")
     
-    return Response({'message': 'Payment successful'})
+    # Fallback redirect
+    return redirect(f"{frontend_url}/order-success")
 
 
 @api_view(['GET'])
@@ -1422,6 +1582,9 @@ def seller_statistics(request):
             status=status.HTTP_403_FORBIDDEN
         )
     
+    from decimal import Decimal
+    from django.db.models import Sum, Q, Count
+    
     # Get seller's products
     total_products = Product.objects.filter(seller=user).count()
     
@@ -1431,30 +1594,91 @@ def seller_statistics(request):
         status='active'
     ).count()
     
-    # Get seller's orders (as seller)
-    seller_orders = Order.objects.filter(seller=user)
+    # Get all orders involving this seller (both single-seller and multi-seller)
+    # Single-seller orders where seller=user
+    single_seller_order_ids = Order.objects.filter(seller=user).values_list('id', flat=True)
+    
+    # Multi-seller orders where user has items
+    multi_seller_order_ids = Order.objects.filter(
+        items__product__seller=user,
+        order_type='cart'
+    ).distinct().values_list('id', flat=True)
+    
+    # Combine both
+    all_order_ids = set(single_seller_order_ids) | set(multi_seller_order_ids)
+    seller_orders = Order.objects.filter(id__in=all_order_ids)
+    
     total_orders = seller_orders.count()
     
-    # Get pending orders (paid but not shipped)
-    pending_orders = seller_orders.filter(status='paid').count()
+    # Get pending orders (paid but not shipped or not all items shipped)
+    # For single-seller orders: status='paid'
+    # For multi-seller orders: check if seller's items are not shipped
+    pending_single = Order.objects.filter(
+        id__in=single_seller_order_ids,
+        status='paid'
+    ).count()
     
-    # Calculate total revenue (from completed/delivered orders)
-    from decimal import Decimal
-    from django.db.models import Sum
-    total_revenue = seller_orders.filter(
+    pending_multi = Order.objects.filter(
+        id__in=multi_seller_order_ids,
+        items__product__seller=user,
+        items__is_shipped=False,
+        status='paid'
+    ).distinct().count()
+    
+    pending_orders = pending_single + pending_multi
+    
+    # Calculate total revenue
+    # From single-seller orders
+    single_revenue = Order.objects.filter(
+        id__in=single_seller_order_ids,
         status__in=['paid', 'shipped', 'delivered']
     ).aggregate(
         total=Sum('seller_amount')
     )['total'] or Decimal('0.00')
     
+    # From multi-seller orders (calculate from OrderItems)
+    multi_revenue_items = OrderItem.objects.filter(
+        order__id__in=multi_seller_order_ids,
+        order__status__in=['paid', 'shipped', 'delivered'],
+        product__seller=user
+    ).aggregate(
+        total=Sum('subtotal')
+    )['total'] or Decimal('0.00')
+    
+    # Apply 2% platform fee deduction
+    multi_revenue = multi_revenue_items * Decimal('0.98')
+    
+    total_revenue = single_revenue + multi_revenue
+    
     # Count total sales (delivered orders)
     total_sales = seller_orders.filter(status='delivered').count()
+    
+    # Calculate current month earnings
+    from datetime import timedelta
+    current_month_start = timezone.now().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    
+    current_month_single = Order.objects.filter(
+        id__in=single_seller_order_ids,
+        status__in=['paid', 'shipped', 'delivered'],
+        paid_at__gte=current_month_start
+    ).aggregate(total=Sum('seller_amount'))['total'] or Decimal('0.00')
+    
+    current_month_multi_items = OrderItem.objects.filter(
+        order__id__in=multi_seller_order_ids,
+        order__status__in=['paid', 'shipped', 'delivered'],
+        order__paid_at__gte=current_month_start,
+        product__seller=user
+    ).aggregate(total=Sum('subtotal'))['total'] or Decimal('0.00')
+    
+    current_month_multi = current_month_multi_items * Decimal('0.98')
+    current_month_earnings = current_month_single + current_month_multi
     
     return Response({
         'total_sales': total_sales,
         'total_orders': total_orders,
         'pending_orders': pending_orders,
         'total_revenue': str(total_revenue),
+        'current_month_earnings': str(current_month_earnings),
         'total_products': total_products,
         'active_auctions': active_auctions,
     })
@@ -1644,7 +1868,66 @@ def seller_earnings(request):
         'earnings_by_week': earnings_by_week,
         'earnings_by_quarter': earnings_by_quarter,
         'earnings_by_year': earnings_by_year,
+        'product_performance': get_product_performance_data(user),
     })
+
+
+def get_product_performance_data(user):
+    """Helper function to get product performance data"""
+    from django.db.models import Count, Sum, Q
+    from decimal import Decimal
+    
+    # Get all products by this seller
+    products = Product.objects.filter(seller=user)
+    
+    product_performance = []
+    
+    for product in products:
+        # Count successful orders (paid, shipped, delivered) from single-seller orders
+        single_orders = Order.objects.filter(
+            seller=user,
+            product=product,
+            status__in=['paid', 'shipped', 'delivered']
+        ).aggregate(
+            order_count=Count('id'),
+            total_quantity=Sum('quantity'),
+            total_revenue=Sum('seller_amount')
+        )
+        
+        # Count from multi-seller orders
+        multi_orders = OrderItem.objects.filter(
+            product=product,
+            order__status__in=['paid', 'shipped', 'delivered']
+        ).aggregate(
+            order_count=Count('id'),
+            total_quantity=Sum('quantity'),
+            total_revenue=Sum('subtotal')
+        )
+        
+        # Combine totals
+        total_orders = (single_orders['order_count'] or 0) + (multi_orders['order_count'] or 0)
+        total_quantity = (single_orders['total_quantity'] or 0) + (multi_orders['total_quantity'] or 0)
+        
+        # Calculate revenue
+        single_revenue = single_orders['total_revenue'] or Decimal('0.00')
+        multi_revenue = (multi_orders['total_revenue'] or Decimal('0.00')) * Decimal('0.98')  # Apply platform fee
+        total_revenue = single_revenue + multi_revenue
+        
+        # Only include products that have been ordered
+        if total_orders > 0:
+            product_performance.append({
+                'id': product.id,
+                'name': product.name,
+                'total_orders': total_orders,
+                'total_quantity_sold': total_quantity,
+                'total_revenue': str(total_revenue),
+                'average_order_value': str(total_revenue / total_orders) if total_orders > 0 else '0.00',
+            })
+    
+    # Sort by total revenue (descending)
+    product_performance.sort(key=lambda x: float(x['total_revenue']), reverse=True)
+    
+    return product_performance
 
 
 # Seller Transactions Endpoint
