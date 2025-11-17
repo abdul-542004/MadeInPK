@@ -519,7 +519,7 @@ class FixedPriceListingSerializer(serializers.ModelSerializer):
         fields = ['id', 'product', 'price', 'original_price', 'current_price', 'quantity', 'status', 
                   'featured', 'discount_percentage', 'discount_start_date', 'discount_end_date',
                   'has_active_discount', 'created_at', 'updated_at']
-        read_only_fields = ['status', 'created_at', 'updated_at']
+        read_only_fields = ['created_at', 'updated_at']
     
     def get_current_price(self, obj):
         """Get the current price after discount"""
@@ -528,6 +528,48 @@ class FixedPriceListingSerializer(serializers.ModelSerializer):
     def get_has_active_discount(self, obj):
         """Check if discount is currently active"""
         return obj.has_active_discount()
+    
+    def validate(self, data):
+        """Validate discount fields during update"""
+        # Get the instance if this is an update
+        instance = getattr(self, 'instance', None)
+        
+        # Get discount fields from data or instance
+        discount_percentage = data.get('discount_percentage')
+        discount_start_date = data.get('discount_start_date')
+        discount_end_date = data.get('discount_end_date')
+        
+        # If instance exists (update), use instance values as fallback
+        if instance:
+            if discount_percentage is None:
+                discount_percentage = instance.discount_percentage
+            if discount_start_date is None:
+                discount_start_date = instance.discount_start_date
+            if discount_end_date is None:
+                discount_end_date = instance.discount_end_date
+        
+        # Check if discount is being cleared (all set to None/null)
+        clearing_discount = (
+            'discount_percentage' in data and data['discount_percentage'] is None and
+            'discount_start_date' in data and data['discount_start_date'] is None and
+            'discount_end_date' in data and data['discount_end_date'] is None
+        )
+        
+        # If any discount field has a value, validate all are present
+        if any([discount_percentage, discount_start_date, discount_end_date]) and not clearing_discount:
+            if not all([discount_percentage, discount_start_date, discount_end_date]):
+                raise serializers.ValidationError(
+                    "If setting a discount, you must provide all discount fields: "
+                    "discount_percentage, discount_start_date, and discount_end_date"
+                )
+            
+            # Validate date range
+            if discount_end_date <= discount_start_date:
+                raise serializers.ValidationError(
+                    "Discount end date must be after start date"
+                )
+        
+        return data
 
 
 class FixedPriceCreateSerializer(serializers.ModelSerializer):
@@ -948,12 +990,21 @@ class CartItemSerializer(serializers.ModelSerializer):
     available_quantity = serializers.IntegerField(source='listing.quantity', read_only=True)
     seller_id = serializers.IntegerField(source='listing.product.seller.id', read_only=True)
     seller_username = serializers.CharField(source='listing.product.seller.username', read_only=True)
+    seller_brand_name = serializers.SerializerMethodField()
     
     class Meta:
         model = CartItem
         fields = ['id', 'listing_id', 'product', 'quantity', 'unit_price', 'subtotal',
-                  'is_available', 'available_quantity', 'seller_id', 'seller_username', 'added_at', 'updated_at']
+                  'is_available', 'available_quantity', 'seller_id', 'seller_username', 
+                  'seller_brand_name', 'added_at', 'updated_at']
         read_only_fields = ['added_at', 'updated_at']
+    
+    def get_seller_brand_name(self, obj):
+        """Get seller's brand name if they have a seller profile"""
+        seller = obj.listing.product.seller
+        if hasattr(seller, 'seller_profile') and seller.seller_profile.brand_name:
+            return seller.seller_profile.brand_name
+        return None
     
     def get_unit_price(self, obj):
         """Get the current price with discount"""

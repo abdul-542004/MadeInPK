@@ -5,14 +5,16 @@ from django.contrib.admin.views.decorators import staff_member_required
 from django.shortcuts import render
 from django.db.models import Count, Sum, Avg, Q, F
 from django.utils import timezone
-from datetime import timedelta
+from django.http import JsonResponse, HttpResponse
+from datetime import timedelta, datetime
 from decimal import Decimal
 import json
+import csv
 
 from .models import (
     User, Product, AuctionListing, FixedPriceListing, Order, 
     Payment, Feedback, Category, SellerProfile, ProductReview,
-    OrderItem, SellerTransfer
+    OrderItem, SellerTransfer, Complaint, PaymentViolation, Notification
 )
 
 
@@ -26,6 +28,15 @@ def admin_dashboard(request):
     week_ago = today - timedelta(days=7)
     month_ago = today - timedelta(days=30)
     year_ago = today - timedelta(days=365)
+    
+    # Get date range from request (for filtering)
+    date_range = request.GET.get('range', '30')  # Default to 30 days
+    try:
+        days = int(date_range)
+    except:
+        days = 30
+    
+    filter_start = today - timedelta(days=days)
     
     # ==================== OVERVIEW STATISTICS ====================
     

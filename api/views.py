@@ -529,6 +529,15 @@ class FixedPriceListingViewSet(viewsets.ModelViewSet):
                         status=status.HTTP_400_BAD_REQUEST
                     )
         
+        # Handle quantity update - automatically reactivate if was out of stock and quantity > 0
+        quantity_update = request.data.get('quantity')
+        if quantity_update is not None:
+            new_quantity = int(quantity_update)
+            if new_quantity > 0 and listing.status == 'out_of_stock':
+                # Automatically reactivate the listing
+                listing.status = 'active'
+                listing.save()
+        
         return super().partial_update(request, *args, **kwargs)
     
     @action(detail=True, methods=['post'], permission_classes=[IsAuthenticated])
@@ -833,7 +842,7 @@ class FeedbackViewSet(viewsets.ModelViewSet):
         return FeedbackSerializer
     
     def create(self, request, *args, **kwargs):
-        """Create feedback for an order"""
+        """Create feedback for an order (auction orders only)"""
         order_id = request.data.get('order_id')
         
         try:
@@ -842,10 +851,10 @@ class FeedbackViewSet(viewsets.ModelViewSet):
             return Response({'error': 'Order not found or you are not the buyer'}, 
                           status=status.HTTP_400_BAD_REQUEST)
         
-        # Check if it's a cart order (multi-seller)
-        if order.order_type == 'cart' or not order.seller:
+        # Only allow feedback for auction orders
+        if order.order_type != 'auction':
             return Response({
-                'error': 'Feedback for multi-seller cart orders is not supported yet. Please provide feedback for individual sellers through their seller profiles.'
+                'error': 'Seller feedback is only available for auction purchases. For fixed-price products, please leave a product review instead.'
             }, status=status.HTTP_400_BAD_REQUEST)
         
         if order.status not in ['shipped', 'delivered']:
@@ -1268,38 +1277,34 @@ class CartViewSet(viewsets.ViewSet):
             status=status.HTTP_201_CREATED
         )
     
-    @action(detail=False, methods=['patch'], url_path='items/(?P<item_id>[^/.]+)')
-    def update_item(self, request, item_id=None):
-        """Update cart item quantity"""
+    @action(detail=False, methods=['patch', 'put', 'delete'], url_path='items/(?P<item_id>[^/.]+)')
+    def cart_item_detail(self, request, item_id=None):
+        """Update or delete a cart item"""
         try:
             cart = Cart.objects.get(user=request.user)
             cart_item = CartItem.objects.get(id=item_id, cart=cart)
         except (Cart.DoesNotExist, CartItem.DoesNotExist):
             return Response({'error': 'Cart item not found'}, status=status.HTTP_404_NOT_FOUND)
         
-        serializer = UpdateCartItemSerializer(
-            data=request.data,
-            context={'request': request, 'cart_item': cart_item}
-        )
-        
-        if not serializer.is_valid():
-            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-        
-        cart_item.quantity = serializer.validated_data['quantity']
-        cart_item.save()
-        
-        return Response(CartItemSerializer(cart_item, context={'request': request}).data)
-    
-    @action(detail=False, methods=['delete'], url_path='items/(?P<item_id>[^/.]+)')
-    def remove_item(self, request, item_id=None):
-        """Remove item from cart"""
-        try:
-            cart = Cart.objects.get(user=request.user)
-            cart_item = CartItem.objects.get(id=item_id, cart=cart)
+        if request.method == 'DELETE':
+            # Remove item from cart
             cart_item.delete()
             return Response({'message': 'Item removed from cart'})
-        except (Cart.DoesNotExist, CartItem.DoesNotExist):
-            return Response({'error': 'Cart item not found'}, status=status.HTTP_404_NOT_FOUND)
+        
+        else:  # PATCH or PUT
+            # Update cart item quantity
+            serializer = UpdateCartItemSerializer(
+                data=request.data,
+                context={'request': request, 'cart_item': cart_item}
+            )
+            
+            if not serializer.is_valid():
+                return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+            
+            cart_item.quantity = serializer.validated_data['quantity']
+            cart_item.save()
+            
+            return Response(CartItemSerializer(cart_item, context={'request': request}).data)
     
     @action(detail=False, methods=['post'])
     def clear(self, request):
