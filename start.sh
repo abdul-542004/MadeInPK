@@ -52,6 +52,12 @@ celery -A MadeInPK beat --loglevel=info --logfile=logs/celery_beat.log &
 CELERY_BEAT_PID=$!
 echo "   PID: $CELERY_BEAT_PID"
 
+# Start Stripe Webhook Listener
+echo "💳 Starting Stripe Webhook Listener..."
+stripe listen --forward-to localhost:8000/api/stripe/webhook/ --log-level info > logs/stripe_webhook.log 2>&1 &
+STRIPE_WEBHOOK_PID=$!
+echo "   PID: $STRIPE_WEBHOOK_PID"
+
 # Give Celery services time to start
 sleep 3
 
@@ -67,6 +73,7 @@ echo "🛑 Daphne stopped. Cleaning up background services..."
 # Kill Celery processes
 kill $CELERY_WORKER_PID 2>/dev/null
 kill $CELERY_BEAT_PID 2>/dev/null
+kill $STRIPE_WEBHOOK_PID 2>/dev/null
 
 echo "✅ All services stopped"
 
@@ -83,5 +90,8 @@ celery -A MadeInPK worker --loglevel=info
 celery -A MadeInPK beat --loglevel=info
 
 # Terminal 4: Redis
-redis-server"
+redis-server
+
+# Terminal 5: Stripe Webhook Listener
+stripe listen --forward-to localhost:8000/api/stripe/webhook/"
 
