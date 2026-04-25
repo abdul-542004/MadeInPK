@@ -360,10 +360,10 @@ class AuctionListingSerializer(serializers.ModelSerializer):
 
 class AuctionCreateSerializer(serializers.ModelSerializer):
     # Product fields for creating product and auction together
-    name = serializers.CharField(write_only=True)
-    description = serializers.CharField(write_only=True)
-    category = serializers.IntegerField(write_only=True)
-    condition = serializers.CharField(write_only=True)
+    name = serializers.CharField(write_only=True, required=False)
+    description = serializers.CharField(write_only=True, required=False)
+    category = serializers.IntegerField(write_only=True, required=False)
+    condition = serializers.CharField(write_only=True, required=False)
     images = serializers.ListField(
         child=serializers.ImageField(), 
         write_only=True, 
@@ -376,8 +376,9 @@ class AuctionCreateSerializer(serializers.ModelSerializer):
     
     class Meta:
         model = AuctionListing
-        fields = ['product_id', 'name', 'description', 'category', 'condition', 'images',
+        fields = ['id', 'product_id', 'name', 'description', 'category', 'condition', 'images',
                   'starting_price', 'start_time', 'end_time', 'duration']
+        read_only_fields = ['id']
     
     def validate_product_id(self, value):
         """Legacy validation for two-step creation"""

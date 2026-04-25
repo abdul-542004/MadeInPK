@@ -1,5 +1,6 @@
 import os
 
+from django.conf import settings
 from django.core.asgi import get_asgi_application
 from django.contrib.staticfiles.handlers import ASGIStaticFilesHandler
 from channels.routing import ProtocolTypeRouter, URLRouter
@@ -14,13 +15,18 @@ django_asgi_app = get_asgi_application()
 from api import routing
 from api.middleware import TokenAuthMiddlewareStack
 
+websocket_application = TokenAuthMiddlewareStack(
+    URLRouter(
+        routing.websocket_urlpatterns
+    )
+)
+
+# Postman and other non-browser WebSocket clients often omit the Origin header.
+# Keep origin validation for non-debug environments, but allow local tooling in debug.
+if not settings.DEBUG:
+    websocket_application = AllowedHostsOriginValidator(websocket_application)
+
 application = ProtocolTypeRouter({
     "http": ASGIStaticFilesHandler(django_asgi_app),
-    "websocket": AllowedHostsOriginValidator(
-        TokenAuthMiddlewareStack(
-            URLRouter(
-                routing.websocket_urlpatterns
-            )
-        )
-    ),
+    "websocket": websocket_application,
 })

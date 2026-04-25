@@ -1,0 +1,905 @@
+{
+  "info": {
+    "_postman_id": "7f2af454-6836-4aa0-bb52-6f82bca8c66b",
+    "name": "MadeInPK Auction / Realtime Bidding Tests",
+    "description": "Postman collection generated from testcases.md for the MadeInPK auction and realtime bidding module.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "_exporter_id": "codex"
+  },
+  "item": [
+    {
+      "name": "Setup",
+      "description": "Run these once before the main auction tests.",
+      "item": [
+        {
+          "name": "S1. Register Seller",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"seller_api_01\",\n  \"email\": \"{{seller_email}}\",\n  \"password\": \"{{seller_password}}\",\n  \"password_confirm\": \"{{seller_password}}\",\n  \"first_name\": \"Seller\",\n  \"last_name\": \"One\",\n  \"phone_number\": \"03001234567\",\n  \"role\": \"seller\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{base_url}}/api/auth/register/",
+            "description": "Register the seller account used by the rest of the collection."
+          },
+          "response": []
+        },
+        {
+          "name": "S2. Login Seller and Save Token",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Seller login OK\", function () {",
+                  "  pm.response.to.have.status(200);",
+                  "});",
+                  "const json = pm.response.json();",
+                  "pm.environment.set(\"seller_token\", json.token);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{seller_email}}\",\n  \"password\": \"{{seller_password}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{base_url}}/api/auth/login/",
+            "description": "Log in the seller and save the returned token into the active Postman environment."
+          },
+          "response": []
+        },
+        {
+          "name": "S3. Register Bidder 1",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"buyer_api_01\",\n  \"email\": \"{{bidder1_email}}\",\n  \"password\": \"{{bidder1_password}}\",\n  \"password_confirm\": \"{{bidder1_password}}\",\n  \"first_name\": \"Buyer\",\n  \"last_name\": \"One\",\n  \"phone_number\": \"03002223333\",\n  \"role\": \"buyer\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{base_url}}/api/auth/register/",
+            "description": "Register the first bidder account."
+          },
+          "response": []
+        },
+        {
+          "name": "S4. Login Bidder 1 and Save Token",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Bidder1 login OK\", function () {",
+                  "  pm.response.to.have.status(200);",
+                  "});",
+                  "const json = pm.response.json();",
+                  "pm.environment.set(\"bidder1_token\", json.token);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{bidder1_email}}\",\n  \"password\": \"{{bidder1_password}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{base_url}}/api/auth/login/",
+            "description": "Log in bidder 1 and save the returned token."
+          },
+          "response": []
+        },
+        {
+          "name": "S5. Register Bidder 2",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"buyer_api_02\",\n  \"email\": \"{{bidder2_email}}\",\n  \"password\": \"{{bidder2_password}}\",\n  \"password_confirm\": \"{{bidder2_password}}\",\n  \"first_name\": \"Buyer\",\n  \"last_name\": \"Two\",\n  \"phone_number\": \"03004445555\",\n  \"role\": \"buyer\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{base_url}}/api/auth/register/",
+            "description": "Register the second bidder account."
+          },
+          "response": []
+        },
+        {
+          "name": "S6. Login Bidder 2 and Save Token",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Bidder2 login OK\", function () {",
+                  "  pm.response.to.have.status(200);",
+                  "});",
+                  "const json = pm.response.json();",
+                  "pm.environment.set(\"bidder2_token\", json.token);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{bidder2_email}}\",\n  \"password\": \"{{bidder2_password}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{base_url}}/api/auth/login/",
+            "description": "Log in bidder 2 and save the returned token."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Auction REST Tests",
+      "description": "Core REST test flow for auction creation, bidding, validation, and inactive-auction checks.",
+      "item": [
+        {
+          "name": "TC-01 Get Categories and Save category_id",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Categories fetched\", function () {",
+                  "  pm.response.to.have.status(200);",
+                  "});",
+                  "const json = pm.response.json();",
+                  "const firstCategory = json.results ? json.results[0] : json[0];",
+                  "pm.expect(firstCategory).to.have.property(\"id\");",
+                  "pm.environment.set(\"category_id\", firstCategory.id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{base_url}}/api/categories/",
+            "description": "Fetch categories and save the first valid category id."
+          },
+          "response": []
+        },
+        {
+          "name": "TC-02 Create Product as Seller",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Product created\", function () {",
+                  "  pm.response.to.have.status(201);",
+                  "});",
+                  "const json = pm.response.json();",
+                  "pm.environment.set(\"product_id\", json.id);",
+                  "pm.expect(json.name).to.eql(\"Realtime Auction Product 01\");"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Token {{seller_token}}"
+              }
+            ],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "category",
+                  "value": "{{category_id}}",
+                  "type": "text"
+                },
+                {
+                  "key": "name",
+                  "value": "Realtime Auction Product 01",
+                  "type": "text"
+                },
+                {
+                  "key": "description",
+                  "value": "Product created for auction bidding Postman testing",
+                  "type": "text"
+                },
+                {
+                  "key": "condition",
+                  "value": "new",
+                  "type": "text"
+                }
+              ]
+            },
+            "url": "{{base_url}}/api/products/",
+            "description": "Create the product that will be attached to the active auction."
+          },
+          "response": []
+        },
+        {
+          "name": "TC-03 Create Active Auction as Seller",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Auction created\", function () {",
+                  "  pm.response.to.have.status(201);",
+                  "});",
+                  "const json = pm.response.json();",
+                  "pm.environment.set(\"auction_id\", json.id);",
+                  "pm.expect(json.current_price).to.eql(\"1000.00\");",
+                  "pm.expect(json.status).to.eql(\"active\");"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Token {{seller_token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"product_id\": {{product_id}},\n  \"starting_price\": 1000.00,\n  \"start_time\": \"2026-04-24T10:00:00Z\",\n  \"end_time\": \"2026-04-30T10:00:00Z\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{base_url}}/api/auctions/",
+            "description": "Create the main active auction used for the bid flow tests."
+          },
+          "response": []
+        },
+        {
+          "name": "TC-04 Get Auction Details",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Auction details fetched\", function () {",
+                  "  pm.response.to.have.status(200);",
+                  "});",
+                  "const json = pm.response.json();",
+                  "pm.expect(json.id).to.eql(Number(pm.environment.get(\"auction_id\")));",
+                  "pm.expect(json.status).to.eql(\"active\");",
+                  "pm.expect(json.total_bids).to.eql(0);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{base_url}}/api/auctions/{{auction_id}}/",
+            "description": "Confirm the auction exists and starts with zero bids."
+          },
+          "response": []
+        },
+        {
+          "name": "TC-05 Place Bid Without Authentication",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Auth required\", function () {",
+                  "  pm.expect(pm.response.code).to.be.oneOf([401, 403]);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"amount\": 1100.00\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{base_url}}/api/auctions/{{auction_id}}/place_bid/",
+            "description": "Verify the bid endpoint requires authentication."
+          },
+          "response": []
+        },
+        {
+          "name": "TC-06 Seller Cannot Bid on Own Auction",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Seller own-bid rejected\", function () {",
+                  "  pm.response.to.have.status(400);",
+                  "});",
+                  "const json = pm.response.json();",
+                  "pm.expect(json.error).to.eql(\"You cannot bid on your own auction\");"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Token {{seller_token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"amount\": 1100.00\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{base_url}}/api/auctions/{{auction_id}}/place_bid/",
+            "description": "Verify the seller cannot bid on their own auction."
+          },
+          "response": []
+        },
+        {
+          "name": "TC-07 Bidder 1 Places First Valid Bid",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"First valid bid accepted\", function () {",
+                  "  pm.response.to.have.status(201);",
+                  "});",
+                  "const json = pm.response.json();",
+                  "pm.expect(json.amount).to.eql(\"1200.00\");",
+                  "pm.expect(json.is_winning).to.eql(true);",
+                  "pm.environment.set(\"last_bid_amount\", json.amount);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Token {{bidder1_token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"amount\": 1200.00\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{base_url}}/api/auctions/{{auction_id}}/place_bid/",
+            "description": "Place the first valid bid with bidder 1."
+          },
+          "response": []
+        },
+        {
+          "name": "TC-08 Reject Lower / Equal Bid",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Low/equal bid rejected\", function () {",
+                  "  pm.response.to.have.status(400);",
+                  "});",
+                  "const json = pm.response.json();",
+                  "pm.expect(json.amount[0]).to.include(\"Bid must be higher than current price\");"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Token {{bidder1_token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"amount\": 1200.00\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{base_url}}/api/auctions/{{auction_id}}/place_bid/",
+            "description": "Verify lower or equal bids are rejected by serializer validation."
+          },
+          "response": []
+        },
+        {
+          "name": "TC-09 Bidder 2 Outbids Bidder 1",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Outbid accepted\", function () {",
+                  "  pm.response.to.have.status(201);",
+                  "});",
+                  "const json = pm.response.json();",
+                  "pm.expect(json.amount).to.eql(\"1500.00\");",
+                  "pm.expect(json.is_winning).to.eql(true);",
+                  "pm.environment.set(\"last_bid_amount\", json.amount);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Token {{bidder2_token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"amount\": 1500.00\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{base_url}}/api/auctions/{{auction_id}}/place_bid/",
+            "description": "Bidder 2 places a higher bid and becomes the current winner."
+          },
+          "response": []
+        },
+        {
+          "name": "TC-10 Get Bid History and Verify Ordering",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Bid history fetched\", function () {",
+                  "  pm.response.to.have.status(200);",
+                  "});",
+                  "const json = pm.response.json();",
+                  "pm.expect(json.length).to.be.at.least(2);",
+                  "pm.expect(json[0].bidder_username).to.eql(\"buyer_api_02\");",
+                  "pm.expect(json[0].is_winning).to.eql(true);",
+                  "pm.expect(json[1].bidder_username).to.eql(\"buyer_api_01\");",
+                  "pm.expect(json[1].is_winning).to.eql(false);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{base_url}}/api/auctions/{{auction_id}}/bids/",
+            "description": "Fetch bid history and verify newest-first ordering and winning flags."
+          },
+          "response": []
+        },
+        {
+          "name": "TC-11 Get Auction Details Again and Verify current_price",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Auction reflects latest price\", function () {",
+                  "  pm.response.to.have.status(200);",
+                  "});",
+                  "const json = pm.response.json();",
+                  "pm.expect(json.current_price).to.eql(\"1500.00\");",
+                  "pm.expect(json.total_bids).to.eql(2);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{base_url}}/api/auctions/{{auction_id}}/",
+            "description": "Verify the auction reflects the latest successful bid."
+          },
+          "response": []
+        },
+        {
+          "name": "TC-14 Filter Seller's Auctions with my_auctions=true",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Seller auctions filtered\", function () {",
+                  "  pm.response.to.have.status(200);",
+                  "});",
+                  "const json = pm.response.json();",
+                  "const list = json.results ? json.results : json;",
+                  "const found = list.some(a => a.id === Number(pm.environment.get(\"auction_id\")));",
+                  "pm.expect(found).to.eql(true);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Token {{seller_token}}"
+              }
+            ],
+            "url": "{{base_url}}/api/auctions/?my_auctions=true",
+            "description": "Confirm the seller can filter to their own auctions."
+          },
+          "response": []
+        },
+        {
+          "name": "TC-15 Create Second Product for Expired-Auction Test",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Second product created\", function () {",
+                  "  pm.response.to.have.status(201);",
+                  "});",
+                  "const json = pm.response.json();",
+                  "pm.environment.set(\"product2_id\", json.id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Token {{seller_token}}"
+              }
+            ],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "category",
+                  "value": "{{category_id}}",
+                  "type": "text"
+                },
+                {
+                  "key": "name",
+                  "value": "Expired Auction Product 01",
+                  "type": "text"
+                },
+                {
+                  "key": "description",
+                  "value": "Product for inactive auction validation",
+                  "type": "text"
+                },
+                {
+                  "key": "condition",
+                  "value": "new",
+                  "type": "text"
+                }
+              ]
+            },
+            "url": "{{base_url}}/api/products/",
+            "description": "Create a second product used for expired-auction validation."
+          },
+          "response": []
+        },
+        {
+          "name": "TC-16 Create Already Expired Auction",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Expired-time auction created\", function () {",
+                  "  pm.response.to.have.status(201);",
+                  "});",
+                  "const json = pm.response.json();",
+                  "pm.environment.set(\"expired_auction_id\", json.id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Token {{seller_token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"product_id\": {{product2_id}},\n  \"starting_price\": 800.00,\n  \"start_time\": \"2026-04-20T10:00:00Z\",\n  \"end_time\": \"2026-04-21T10:00:00Z\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{base_url}}/api/auctions/",
+            "description": "Create an auction whose time window is already over."
+          },
+          "response": []
+        },
+        {
+          "name": "TC-17 Try Bidding on Expired Auction",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Inactive auction bid rejected\", function () {",
+                  "  pm.response.to.have.status(400);",
+                  "});",
+                  "const json = pm.response.json();",
+                  "pm.expect(json.error).to.eql(\"Auction is not active\");"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Token {{bidder1_token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"amount\": 900.00\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{base_url}}/api/auctions/{{expired_auction_id}}/place_bid/",
+            "description": "Confirm bidding is rejected when the auction is no longer active."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Notifications",
+      "description": "Requests for verifying and updating outbid notifications.",
+      "item": [
+        {
+          "name": "TC-12 Check Outbid Notification for Bidder 1",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Notifications fetched\", function () {",
+                  "  pm.response.to.have.status(200);",
+                  "});",
+                  "const json = pm.response.json();",
+                  "const list = json.results ? json.results : json;",
+                  "const notif = list.find(n => n.notification_type === \"bid_outbid\" && n.auction === Number(pm.environment.get(\"auction_id\")));",
+                  "pm.expect(notif).to.exist;",
+                  "if (notif) {",
+                  "  pm.environment.set(\"outbid_notification_id\", notif.id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Token {{bidder1_token}}"
+              }
+            ],
+            "url": "{{base_url}}/api/notifications/",
+            "description": "Verify bidder 1 received an outbid notification."
+          },
+          "response": []
+        },
+        {
+          "name": "TC-13 Mark Outbid Notification as Read",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Notification marked read\", function () {",
+                  "  pm.response.to.have.status(200);",
+                  "});",
+                  "const json = pm.response.json();",
+                  "pm.expect(json.message).to.eql(\"Notification marked as read\");"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Token {{bidder1_token}}"
+              }
+            ],
+            "url": "{{base_url}}/api/notifications/{{outbid_notification_id}}/mark_read/",
+            "description": "Mark the previously found outbid notification as read."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Realtime WebSocket",
+      "description": "Manual smoke-test requests for the auction WebSocket channel.",
+      "item": [
+        {
+          "name": "WS-1 Connect to Auction Channel",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{ws_base_url}}/ws/auction/{{auction_id}}/?token={{bidder1_token}}",
+            "description": "Open this WebSocket as bidder 1. On connect, the first server message should have type `auction_status` and include current price, latest bids, and seller/product data."
+          },
+          "response": []
+        },
+        {
+          "name": "WS-2 Connect as Bidder 2 for Broadcast Check",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{ws_base_url}}/ws/auction/{{auction_id}}/?token={{bidder2_token}}",
+            "description": "After WS-1 is open, connect here as bidder 2 and send this message from the WebSocket message composer: {\"type\":\"place_bid\",\"amount\":1600.00}. Bidder 1 should receive a `new_bid` event with bidder `buyer_api_02` and amount `1600.00`."
+          },
+          "response": []
+        }
+      ]
+    }
+  ]
+}
